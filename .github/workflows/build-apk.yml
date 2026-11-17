@@ -3,7 +3,13 @@ name: Build BT Tube APK
 on:
   push:
     branches: [ "**" ]
+    tags: [ "v*" ]
+  pull_request:
+    branches: [ "main", "master" ]
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build-apk:
@@ -13,23 +19,69 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 17
+          java-version: 21
 
-      - name: Set up Gradle 9.3.1
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Accept Android SDK licenses and install SDK 36.1
+        shell: bash
+        run: |
+          set +o pipefail
+          SDK_ROOT="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          SDKMANAGER="$(command -v sdkmanager || true)"
+          if [ -z "$SDKMANAGER" ]; then
+            for candidate in \
+              "$SDK_ROOT"/cmdline-tools/latest/bin/sdkmanager \
+              "$SDK_ROOT"/cmdline-tools/*/bin/sdkmanager \
+              "$SDK_ROOT"/cmdline-tools/bin/sdkmanager \
+              "$SDK_ROOT"/tools/bin/sdkmanager; do
+              if [ -x "$candidate" ]; then
+                SDKMANAGER="$candidate"
+                break
+              fi
+            done
+          fi
+
+          if [ -z "$SDKMANAGER" ]; then
+            echo "sdkmanager not found in $SDK_ROOT"
+            exit 1
+          fi
+
+          mkdir -p "$SDK_ROOT/licenses"
+          yes | "$SDKMANAGER" --sdk_root="$SDK_ROOT" --licenses >/dev/null 2>&1 || true
+          "$SDKMANAGER" --sdk_root="$SDK_ROOT" "cmdline-tools;latest" "platform-tools" "build-tools;36.0.0" || true
+
+          LATEST_SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          if [ -x "$LATEST_SDKMANAGER" ]; then
+            SDKMANAGER="$LATEST_SDKMANAGER"
+          fi
+
+          yes | "$SDKMANAGER" --sdk_root="$SDK_ROOT" --licenses >/dev/null 2>&1 || true
+          if ! "$SDKMANAGER" --sdk_root="$SDK_ROOT" "platforms;android-36.1"; then
+            "$SDKMANAGER" --sdk_root="$SDK_ROOT" "platforms;android-36"
+          fi
+
+      - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 9.3.1
 
-      - name: Accept Android SDK licenses
-        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
-
-      - name: Ensure debug keystore exists for CI build
+      - name: Ensure gradlew is executable
         run: |
-          if [ ! -f debug.keystore ]; then
+          if [ -f gradlew ]; then
+            chmod +x gradlew
+          fi
+
+      - name: Restore debug keystore matching Firebase SHA-1
+        run: |
+          if [ -f debug.keystore.base64 ]; then
+            base64 -d debug.keystore.base64 > debug.keystore
+          elif [ ! -f debug.keystore ]; then
             keytool -genkeypair -v \
               -keystore debug.keystore \
               -storepass android \
@@ -41,12 +93,21 @@ jobs:
               -dname "CN=Android Debug,O=Android,C=US"
           fi
 
-      - name: Build Debug APK
-        run: gradle :app:assembleDebug --no-daemon
+      - name: Build BT Tube Debug APK
+        run: |
+          if [ -x ./gradlew ]; then
+            ./gradlew :app:assembleDebug --no-daemon --stacktrace
+          else
+            gradle :app:assembleDebug --no-daemon --stacktrace
+          fi
+          cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/BT-Tube.apk
 
-      - name: Upload BT Tube Debug APK
+      - name: Upload BT Tube APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: BT-Tube-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: BT-Tube-APK
+          path: |
+            app/build/outputs/apk/debug/BT-Tube.apk
+            app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+          retention-days: 30

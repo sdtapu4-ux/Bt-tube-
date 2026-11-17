@@ -366,18 +366,18 @@ class ExampleRobolectricTest {
         composeTestRule.onNodeWithTag("player_like_button").performClick()
         composeTestRule.mainClock.advanceTimeBy(100)
         composeTestRule.onNodeWithTag("player_back_button").performClick()
-        composeTestRule.mainClock.advanceTimeBy(250)
-        composeTestRule.mainClock.autoAdvance = true
-        composeTestRule.waitForIdle()
+        composeTestRule.mainClock.advanceTimeBy(600)
 
         // 6. Search for the newly added Video Song
         composeTestRule.onNodeWithTag("nav_home").performClick()
-        composeTestRule.waitForIdle()
+        composeTestRule.mainClock.advanceTimeBy(300)
         composeTestRule.onNodeWithTag("home_search_button").performClick()
-        composeTestRule.waitForIdle()
+        composeTestRule.mainClock.advanceTimeBy(350)
         composeTestRule.onNodeWithTag("search_input").performTextInput("Acoustic")
+        composeTestRule.mainClock.advanceTimeBy(150)
         composeTestRule.onNodeWithTag("search_submit_button").performClick()
-        composeTestRule.waitForIdle()
+        composeTestRule.mainClock.advanceTimeBy(300)
         composeTestRule.onNodeWithText("Acoustic Video Song").assertIsDisplayed()
+        composeTestRule.mainClock.autoAdvance = true
     }
 }
