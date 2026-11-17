@@ -26,6 +26,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.FolderOpen
+import androidx.compose.material.icons.outlined.LibraryAdd
 import androidx.compose.material.icons.outlined.MovieCreation
 import androidx.compose.material.icons.outlined.VideoFile
 import androidx.compose.material.icons.rounded.CheckCircle
@@ -68,8 +70,11 @@ fun CreateScreen(
         description: String,
         category: VideoCategory,
         sceneStyle: StudioSceneStyle,
-        isShort: Boolean
+        isShort: Boolean,
+        videoUri: String?
     ) -> Unit,
+    onImportMultipleVideos: () -> Unit,
+    onImportVideoFolder: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var isShort by remember { mutableStateOf(false) }
@@ -179,7 +184,11 @@ fun CreateScreen(
                     .ifEmpty { if (isShort) "NEW SHORT" else "NEW VIDEO" }
 
                 VideoThumbnailSurface(
-                    artwork = ThumbnailArtwork.VectorScene(selectedStyle, previewBadge),
+                    artwork = if (pickedMediaUri != null) {
+                        ThumbnailArtwork.LocalVideoFrame(pickedMediaUri.toString())
+                    } else {
+                        ThumbnailArtwork.VectorScene(selectedStyle, previewBadge)
+                    },
                     contentDescription = "Studio thumbnail preview",
                     durationLabel = if (isShort) "0:30" else "04:05",
                     is4K = !isShort,
@@ -189,6 +198,39 @@ fun CreateScreen(
                         .height(164.dp)
                         .clip(RoundedCornerShape(18.dp))
                 )
+
+                // Bulk Phone Video Importers
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = onImportMultipleVideos,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.LibraryAdd,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.size(6.dp))
+                        Text("Import All Videos", maxLines = 1)
+                    }
+                    OutlinedButton(
+                        onClick = onImportVideoFolder,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.FolderOpen,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.size(6.dp))
+                        Text("Import Folder", maxLines = 1)
+                    }
+                }
 
                 // Zero-permission Photo Picker integration
                 OutlinedButton(
@@ -336,7 +378,8 @@ fun CreateScreen(
                                 description,
                                 selectedCategory,
                                 selectedStyle,
-                                isShort
+                                isShort,
+                                pickedMediaUri?.toString()
                             )
                             title = ""
                             description = ""

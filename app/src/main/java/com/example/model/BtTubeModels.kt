@@ -44,6 +44,7 @@ enum class StudioSceneStyle(val label: String, val startHex: Long, val endHex: L
 sealed interface ThumbnailArtwork {
     data class PhotoDrawable(@param:DrawableRes val resId: Int) : ThumbnailArtwork
     data class VectorScene(val style: StudioSceneStyle, val badgeText: String) : ThumbnailArtwork
+    data class LocalVideoFrame(val uriString: String) : ThumbnailArtwork
 }
 
 data class Channel(
@@ -86,7 +87,8 @@ data class VideoItem(
     val artwork: ThumbnailArtwork,
     val tags: List<String> = emptyList(),
     val comments: List<VideoComment> = emptyList(),
-    val isUserCreated: Boolean = false
+    val isUserCreated: Boolean = false,
+    val videoUri: String? = null
 )
 
 data class ShortItem(
@@ -101,7 +103,8 @@ data class ShortItem(
     val durationSeconds: Int,
     val artwork: ThumbnailArtwork,
     val comments: List<VideoComment> = emptyList(),
-    val isUserCreated: Boolean = false
+    val isUserCreated: Boolean = false,
+    val videoUri: String? = null
 )
 
 data class NotificationItem(
@@ -127,6 +130,7 @@ data class AppSettings(
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
     val autoplayNext: Boolean = true,
     val notificationsEnabled: Boolean = true,
+    val streamOnMobileData: Boolean = true,
     val defaultQuality: PlaybackQuality = PlaybackQuality.HD_1080
 )
 

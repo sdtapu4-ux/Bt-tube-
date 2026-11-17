@@ -247,6 +247,10 @@ class BtTubeRepository {
         _settings.update { it.copy(notificationsEnabled = !it.notificationsEnabled) }
     }
 
+    fun toggleStreamOnMobileData() {
+        _settings.update { it.copy(streamOnMobileData = !it.streamOnMobileData) }
+    }
+
     fun updateDefaultQuality(quality: PlaybackQuality) {
         _settings.update { it.copy(defaultQuality = quality) }
     }
@@ -256,11 +260,17 @@ class BtTubeRepository {
         description: String,
         category: VideoCategory,
         sceneStyle: StudioSceneStyle,
-        isShort: Boolean
+        isShort: Boolean,
+        videoUri: String? = null
     ): String {
         val profile = _userProfile.value
         val creatorChannelId = ensureUserChannel(profile, category)
         val badge = title.trim().split(" ").take(2).joinToString(" ").uppercase().ifEmpty { "NEW" }
+        val artwork = if (videoUri != null) {
+            ThumbnailArtwork.LocalVideoFrame(videoUri)
+        } else {
+            ThumbnailArtwork.VectorScene(sceneStyle, badge)
+        }
         return if (isShort) {
             val newId = "short_user_${UUID.randomUUID()}"
             val newShort = ShortItem(
@@ -273,8 +283,9 @@ class BtTubeRepository {
                 baseSharesCount = 0,
                 audioTrack = "${profile.name} — Original Audio",
                 durationSeconds = 30,
-                artwork = ThumbnailArtwork.VectorScene(sceneStyle, badge),
-                isUserCreated = true
+                artwork = artwork,
+                isUserCreated = true,
+                videoUri = videoUri
             )
             _shorts.update { listOf(newShort) + it }
             newId
@@ -291,13 +302,89 @@ class BtTubeRepository {
                 durationSeconds = 245,
                 is4K = true,
                 baseLikes = 1,
-                artwork = ThumbnailArtwork.VectorScene(sceneStyle, badge),
+                artwork = artwork,
                 tags = listOf(category.label, "CreatorStudio", "BTTube"),
-                isUserCreated = true
+                isUserCreated = true,
+                videoUri = videoUri
             )
             _videos.update { listOf(newVideo) + it }
             newId
         }
+    }
+
+    fun importDeviceVideos(imported: List<ImportedDeviceVideo>): Int {
+        if (imported.isEmpty()) return 0
+        val existingUris = _videos.value.mapNotNull { it.videoUri }.toSet()
+        val fresh = imported.filter { it.uriString !in existingUris }
+        if (fresh.isEmpty()) return 0
+
+        val deviceChannelId = ensureDeviceChannel()
+        val newVideos = fresh.map { item ->
+            VideoItem(
+                id = "vid_device_${UUID.randomUUID()}",
+                title = item.title,
+                description = "Imported from your phone storage to BT Tube.",
+                channelId = deviceChannelId,
+                category = VideoCategory.ALL,
+                viewsCount = 1,
+                uploadDate = "On device",
+                durationSeconds = item.durationSeconds,
+                is4K = false,
+                baseLikes = 0,
+                artwork = ThumbnailArtwork.LocalVideoFrame(item.uriString),
+                tags = listOf("MyPhone", "LocalVideo"),
+                isUserCreated = true,
+                videoUri = item.uriString
+            )
+        }
+
+        val newShorts = fresh
+            .filter { it.durationSeconds <= 60 }
+            .map { item ->
+                ShortItem(
+                    id = "short_device_${UUID.randomUUID()}",
+                    title = item.title,
+                    caption = "From My Phone #BTTube",
+                    channelId = deviceChannelId,
+                    baseLikes = 0,
+                    baseCommentsCount = 0,
+                    baseSharesCount = 0,
+                    audioTrack = "Original Device Audio",
+                    durationSeconds = item.durationSeconds.coerceIn(5, 60),
+                    artwork = ThumbnailArtwork.LocalVideoFrame(item.uriString),
+                    isUserCreated = true,
+                    videoUri = item.uriString
+                )
+            }
+
+        _videos.update { newVideos + it }
+        if (newShorts.isNotEmpty()) {
+            _shorts.update { newShorts + it }
+        }
+        return newVideos.size
+    }
+
+    private fun ensureDeviceChannel(): String {
+        val deviceChannelId = "ch_device_videos"
+        if (_channels.value.none { it.id == deviceChannelId }) {
+            _channels.update {
+                listOf(
+                    Channel(
+                        id = deviceChannelId,
+                        name = "My Phone Videos",
+                        handle = "@myphone",
+                        baseSubscriberCount = 1,
+                        isVerified = true,
+                        avatarColorHex = 0xFFD91424,
+                        initials = "MP",
+                        category = VideoCategory.TECH,
+                        tagline = "Videos imported from your Android device"
+                    )
+                ) + it
+            }
+            _subscribedChannelIds.update { it + deviceChannelId }
+        }
+        return deviceChannelId
     }
 
     private fun ensureUserChannel(profile: UserProfile, category: VideoCategory): String {

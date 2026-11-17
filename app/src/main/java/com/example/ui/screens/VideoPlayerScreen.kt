@@ -1,5 +1,10 @@
 package com.example.ui.screens
 
+import android.media.AudioManager
+import android.media.MediaPlayer
+import android.net.Uri
+import android.os.Build
+import android.widget.VideoView
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -32,6 +37,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.VolumeOff
+import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.outlined.BookmarkAdd
 import androidx.compose.material.icons.outlined.BookmarkAdded
 import androidx.compose.material.icons.outlined.Share
@@ -63,8 +70,10 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -78,11 +87,13 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import com.example.R
 import com.example.model.VideoItem
 import com.example.ui.components.ChannelAvatar
@@ -95,6 +106,7 @@ import com.example.ui.theme.BtVerifiedBlue
 import com.example.ui.theme.BtWhite
 import com.example.ui.viewmodel.PlayerUiState
 import com.example.util.FormatUtils
+import com.example.util.VideoAudioHelper
 import kotlinx.coroutines.delay
 import kotlin.math.sin
 
@@ -106,6 +118,7 @@ fun VideoPlayerScreen(
     onTogglePlayPause: () -> Unit,
     onSeekTo: (Float) -> Unit,
     onSeekBy: (Float) -> Unit,
+    onSyncPosition: (Float) -> Unit,
     onAdvancePlayback: (Float) -> Unit,
     onSelectSpeed: (Float) -> Unit,
     onToggleFullscreen: () -> Unit,
@@ -123,16 +136,42 @@ fun VideoPlayerScreen(
     val channel = state.channel
 
     var controlsVisible by remember { mutableStateOf(true) }
+    var isMuted by remember { mutableStateOf(false) }
     var descriptionExpanded by remember { mutableStateOf(false) }
     var showCommentsSheet by remember { mutableStateOf(false) }
     var seekFeedbackText by remember { mutableStateOf<String?>(null) }
+    var pendingSeekSeconds by remember { mutableStateOf<Float?>(null) }
+    val context = LocalContext.current
 
     BackHandler(enabled = state.isFullscreen) {
         onExitFullscreen()
     }
 
-    // Real-time playback ticker scaled by playbackSpeed
-    LaunchedEffect(state.isPlaying, state.playbackSpeed, video.id) {
+    // Request media audio focus whenever video playback is audible
+    DisposableEffect(state.isPlaying, isMuted, video.id) {
+        val abandonFocus = if (state.isPlaying && !isMuted) {
+            VideoAudioHelper.requestMediaAudioFocus(context)
+        } else {
+            {}
+        }
+        onDispose {
+            abandonFocus()
+        }
+    }
+
+    // Play ambient soundtrack for sample catalog videos without a local videoUri
+    LaunchedEffect(state.isPlaying, isMuted, state.playbackSpeed, video.id, video.videoUri) {
+        if (video.videoUri == null && state.isPlaying && !isMuted) {
+            VideoAudioHelper.playAmbientSoundtrack(
+                seedKey = video.id,
+                playbackSpeed = state.playbackSpeed
+            )
+        }
+    }
+
+    // Simulated playback ticker only when playing sample catalog videos without a local videoUri
+    LaunchedEffect(state.isPlaying, state.playbackSpeed, video.id, video.videoUri) {
+        if (video.videoUri != null) return@LaunchedEffect
         while (state.isPlaying) {
             delay(100L)
             onAdvancePlayback(0.1f * state.playbackSpeed)
@@ -151,17 +190,24 @@ fun VideoPlayerScreen(
         VideoPlaybackStage(
             video = video,
             isPlaying = state.isPlaying,
+            isMuted = isMuted,
             isFullscreen = state.isFullscreen,
             currentPositionSeconds = state.currentPositionSeconds,
             playbackSpeed = state.playbackSpeed,
             controlsVisible = controlsVisible,
             seekFeedbackText = seekFeedbackText,
             onToggleControls = { controlsVisible = !controlsVisible },
+            onToggleMute = { isMuted = !isMuted },
             onDoubleTapLeft = {
+                val target = (state.currentPositionSeconds - 10f).coerceAtLeast(0f)
+                pendingSeekSeconds = target
                 onSeekBy(-10f)
                 seekFeedbackText = "-10s"
             },
             onDoubleTapRight = {
+                val target = (state.currentPositionSeconds + 10f)
+                    .coerceAtMost(video.durationSeconds.toFloat().coerceAtLeast(1f))
+                pendingSeekSeconds = target
                 onSeekBy(10f)
                 seekFeedbackText = "+10s"
             },
@@ -169,7 +215,13 @@ fun VideoPlayerScreen(
                 if (state.isFullscreen) onExitFullscreen() else onBack()
             },
             onTogglePlayPause = onTogglePlayPause,
-            onSeekTo = onSeekTo,
+            onSeekTo = { sec ->
+                pendingSeekSeconds = sec
+                onSeekTo(sec)
+            },
+            pendingSeekSeconds = pendingSeekSeconds,
+            onConsumePendingSeek = { pendingSeekSeconds = null },
+            onSyncPosition = onSyncPosition,
             onSelectSpeed = onSelectSpeed,
             onToggleFullscreen = onToggleFullscreen,
             modifier = playerMod
@@ -500,17 +552,22 @@ fun VideoPlayerScreen(
 private fun VideoPlaybackStage(
     video: VideoItem,
     isPlaying: Boolean,
+    isMuted: Boolean,
     isFullscreen: Boolean,
     currentPositionSeconds: Float,
     playbackSpeed: Float,
     controlsVisible: Boolean,
     seekFeedbackText: String?,
     onToggleControls: () -> Unit,
+    onToggleMute: () -> Unit,
     onDoubleTapLeft: () -> Unit,
     onDoubleTapRight: () -> Unit,
     onBack: () -> Unit,
     onTogglePlayPause: () -> Unit,
     onSeekTo: (Float) -> Unit,
+    pendingSeekSeconds: Float?,
+    onConsumePendingSeek: () -> Unit,
+    onSyncPosition: (Float) -> Unit,
     onSelectSpeed: (Float) -> Unit,
     onToggleFullscreen: () -> Unit,
     modifier: Modifier = Modifier
@@ -535,24 +592,37 @@ private fun VideoPlaybackStage(
                 )
             }
     ) {
-        // Subtle live zoom motion during active playback
-        val motionScale = if (isPlaying) {
-            1f + 0.03f * sin(currentPositionSeconds * 0.45f)
+        if (video.videoUri != null) {
+            RealLocalVideoSurface(
+                uriString = video.videoUri,
+                isPlaying = isPlaying,
+                isMuted = isMuted,
+                playbackSpeed = playbackSpeed,
+                pendingSeekSeconds = pendingSeekSeconds,
+                onConsumePendingSeek = onConsumePendingSeek,
+                onPositionUpdate = onSyncPosition,
+                modifier = Modifier.fillMaxSize()
+            )
         } else {
-            1f
-        }
+            // Subtle live zoom motion during active playback for sample catalog entries
+            val motionScale = if (isPlaying) {
+                1f + 0.03f * sin(currentPositionSeconds * 0.45f)
+            } else {
+                1f
+            }
 
-        VideoThumbnailSurface(
-            artwork = video.artwork,
-            contentDescription = video.title,
-            aspectRatio = null,
-            modifier = Modifier
-                .fillMaxSize()
-                .graphicsLayer(
-                    scaleX = motionScale,
-                    scaleY = motionScale
-                )
-        )
+            VideoThumbnailSurface(
+                artwork = video.artwork,
+                contentDescription = video.title,
+                aspectRatio = null,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer(
+                        scaleX = motionScale,
+                        scaleY = motionScale
+                    )
+            )
+        }
 
         // Live animated audio/frame equalizer bar strip at very bottom when controls are hidden
         if (isPlaying && !controlsVisible) {
@@ -645,54 +715,80 @@ private fun VideoPlaybackStage(
                         }
                     }
 
-                    // Playback Speed Selector
-                    Box {
-                        Surface(
-                            color = Color.Black.copy(alpha = 0.55f),
-                            shape = RoundedCornerShape(999.dp),
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        // Sound Mute / Unmute Toggle
+                        IconButton(
+                            onClick = onToggleMute,
                             modifier = Modifier
-                                .clip(RoundedCornerShape(999.dp))
-                                .clickable { speedMenuExpanded = true }
-                                .testTag("playback_speed_button")
+                                .size(38.dp)
+                                .clip(CircleShape)
+                                .background(Color.Black.copy(alpha = 0.55f))
+                                .testTag("player_mute_button")
                         ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Rounded.Speed,
-                                    contentDescription = "Playback speed",
-                                    tint = BtWhite,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Text(
-                                    text = "${playbackSpeed}x",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = BtWhite,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
+                            Icon(
+                                imageVector = if (isMuted) {
+                                    Icons.AutoMirrored.Rounded.VolumeOff
+                                } else {
+                                    Icons.AutoMirrored.Rounded.VolumeUp
+                                },
+                                contentDescription = if (isMuted) "Unmute video" else "Mute video",
+                                tint = BtWhite,
+                                modifier = Modifier.size(18.dp)
+                            )
                         }
 
-                        DropdownMenu(
-                            expanded = speedMenuExpanded,
-                            onDismissRequest = { speedMenuExpanded = false }
-                        ) {
-                            speedOptions.forEach { speed ->
-                                DropdownMenuItem(
-                                    text = {
-                                        Text(
-                                            text = if (speed == 1.0f) "1.0x (Normal)" else "${speed}x",
-                                            fontWeight = if (speed == playbackSpeed) FontWeight.Bold else FontWeight.Normal,
-                                            color = if (speed == playbackSpeed) BtCrimson else MaterialTheme.colorScheme.onSurface
-                                        )
-                                    },
-                                    onClick = {
-                                        speedMenuExpanded = false
-                                        onSelectSpeed(speed)
-                                    }
-                                )
+                        // Playback Speed Selector
+                        Box {
+                            Surface(
+                                color = Color.Black.copy(alpha = 0.55f),
+                                shape = RoundedCornerShape(999.dp),
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(999.dp))
+                                    .clickable { speedMenuExpanded = true }
+                                    .testTag("playback_speed_button")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Speed,
+                                        contentDescription = "Playback speed",
+                                        tint = BtWhite,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Text(
+                                        text = "${playbackSpeed}x",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = BtWhite,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+
+                            DropdownMenu(
+                                expanded = speedMenuExpanded,
+                                onDismissRequest = { speedMenuExpanded = false }
+                            ) {
+                                speedOptions.forEach { speed ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                text = if (speed == 1.0f) "1.0x (Normal)" else "${speed}x",
+                                                fontWeight = if (speed == playbackSpeed) FontWeight.Bold else FontWeight.Normal,
+                                                color = if (speed == playbackSpeed) BtCrimson else MaterialTheme.colorScheme.onSurface
+                                            )
+                                        },
+                                        onClick = {
+                                            speedMenuExpanded = false
+                                            onSelectSpeed(speed)
+                                        }
+                                    )
+                                }
                             }
                         }
                     }
@@ -875,5 +971,109 @@ private fun ActionPillButton(
                 }
             )
         }
+    }
+}
+
+@Composable
+private fun RealLocalVideoSurface(
+    uriString: String,
+    isPlaying: Boolean,
+    isMuted: Boolean,
+    playbackSpeed: Float,
+    pendingSeekSeconds: Float?,
+    onConsumePendingSeek: () -> Unit,
+    onPositionUpdate: (Float) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var videoViewRef by remember(uriString) { mutableStateOf<VideoView?>(null) }
+    var mediaPlayerRef by remember(uriString) { mutableStateOf<MediaPlayer?>(null) }
+
+    DisposableEffect(uriString) {
+        onDispose {
+            runCatching { videoViewRef?.stopPlayback() }
+            mediaPlayerRef = null
+        }
+    }
+
+    LaunchedEffect(isPlaying, videoViewRef) {
+        val vv = videoViewRef ?: return@LaunchedEffect
+        runCatching {
+            if (isPlaying && !vv.isPlaying) vv.start()
+            else if (!isPlaying && vv.isPlaying) vv.pause()
+        }
+    }
+
+    LaunchedEffect(isMuted, mediaPlayerRef) {
+        val mp = mediaPlayerRef ?: return@LaunchedEffect
+        val volume = if (isMuted) 0f else 1f
+        runCatching { mp.setVolume(volume, volume) }
+    }
+
+    LaunchedEffect(playbackSpeed, mediaPlayerRef) {
+        val mp = mediaPlayerRef ?: return@LaunchedEffect
+        runCatching {
+            val params = mp.playbackParams
+            params.speed = playbackSpeed
+            mp.playbackParams = params
+        }
+    }
+
+    LaunchedEffect(pendingSeekSeconds, videoViewRef) {
+        val target = pendingSeekSeconds ?: return@LaunchedEffect
+        val vv = videoViewRef ?: return@LaunchedEffect
+        runCatching {
+            vv.seekTo((target * 1000f).toInt())
+        }
+        onConsumePendingSeek()
+    }
+
+    LaunchedEffect(isPlaying, videoViewRef, uriString) {
+        while (isPlaying) {
+            val vv = videoViewRef
+            if (vv != null) {
+                runCatching {
+                    onPositionUpdate(vv.currentPosition / 1000f)
+                }
+            }
+            delay(250L)
+        }
+    }
+
+    key(uriString) {
+        AndroidView(
+            modifier = modifier,
+            factory = { context ->
+                VideoView(context).apply {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        runCatching {
+                            setAudioFocusRequest(AudioManager.AUDIOFOCUS_GAIN)
+                            setAudioAttributes(VideoAudioHelper.mediaAudioAttributes())
+                        }
+                    }
+                    setVideoURI(Uri.parse(uriString))
+                    setOnPreparedListener { mp ->
+                        mediaPlayerRef = mp
+                        runCatching {
+                            mp.setAudioAttributes(VideoAudioHelper.mediaAudioAttributes())
+                        }
+                        val volume = if (isMuted) 0f else 1f
+                        runCatching { mp.setVolume(volume, volume) }
+                        runCatching {
+                            val params = mp.playbackParams
+                            params.speed = playbackSpeed
+                            mp.playbackParams = params
+                        }
+                        if (isPlaying) start()
+                    }
+                    setOnCompletionListener {
+                        runCatching { onPositionUpdate(duration / 1000f) }
+                    }
+                    videoViewRef = this
+                }
+            },
+            update = { view ->
+                videoViewRef = view
+            }
+        )
     }
 }

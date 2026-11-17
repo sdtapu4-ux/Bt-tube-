@@ -26,12 +26,15 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Login
 import androidx.compose.material.icons.automirrored.rounded.Logout
 import androidx.compose.material.icons.outlined.BookmarkBorder
+import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.NotificationsActive
 import androidx.compose.material.icons.outlined.PersonAdd
+import androidx.compose.material.icons.outlined.PhoneAndroid
 import androidx.compose.material.icons.outlined.PlayCircle
 import androidx.compose.material.icons.outlined.ThumbUp
 import androidx.compose.material.icons.outlined.VideoLibrary
+import androidx.compose.material.icons.rounded.CellTower
 import androidx.compose.material.icons.rounded.HighQuality
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material3.Button
@@ -82,6 +85,7 @@ import com.example.ui.theme.BtWhite
 import com.example.ui.theme.OutfitFontFamily
 import com.example.ui.viewmodel.ProfileUiState
 import com.example.util.FormatUtils
+import com.example.util.NetworkConnectionState
 
 private enum class AuthDialogMode { NONE, SIGN_IN, SIGN_UP }
 private enum class LibrarySheetMode { NONE, HISTORY, LIKED, WATCH_LATER }
@@ -90,13 +94,18 @@ private enum class LibrarySheetMode { NONE, HISTORY, LIKED, WATCH_LATER }
 @Composable
 fun ProfileScreen(
     state: ProfileUiState,
+    networkState: NetworkConnectionState,
     onSignIn: (email: String, displayName: String?) -> Unit,
     onSignOut: () -> Unit,
     onVideoClick: (VideoItem) -> Unit,
+    onScanAllMediaStoreVideos: () -> Unit,
+    onImportMultipleVideos: () -> Unit,
+    onImportVideoFolder: () -> Unit,
     onClearHistory: () -> Unit,
     onUpdateThemeMode: (ThemeMode) -> Unit,
     onToggleAutoplay: () -> Unit,
     onToggleNotifications: () -> Unit,
+    onToggleMobileData: () -> Unit,
     onUpdateQuality: (PlaybackQuality) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -336,6 +345,50 @@ fun ProfileScreen(
                     )
                 }
 
+                // My Phone Videos Shelf
+                item(key = "device_videos_shelf") {
+                    Column {
+                        ProfileVideoShelf(
+                            title = "My Phone Videos",
+                            icon = Icons.Outlined.PhoneAndroid,
+                            videos = state.deviceVideos,
+                            channelsById = state.channelsById,
+                            emptyText = "Add videos from your phone gallery or folder to watch offline in BT Tube.",
+                            onSeeAll = null,
+                            onVideoClick = onVideoClick,
+                            testTag = "device_videos_shelf"
+                        )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Button(
+                                onClick = onScanAllMediaStoreVideos,
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Scan All", maxLines = 1)
+                            }
+                            OutlinedButton(
+                                onClick = onImportMultipleVideos,
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Pick", maxLines = 1)
+                            }
+                            OutlinedButton(
+                                onClick = onImportVideoFolder,
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Folder", maxLines = 1)
+                            }
+                        }
+                    }
+                }
+
                 // Your Uploads (if user published via Create)
                 if (state.uploadedVideos.isNotEmpty()) {
                     item(key = "uploads_shelf") {
@@ -487,6 +540,47 @@ fun ProfileScreen(
                                         checked = state.settings.notificationsEnabled,
                                         onCheckedChange = { onToggleNotifications() },
                                         modifier = Modifier.testTag("settings_notifications_switch")
+                                    )
+                                }
+
+                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+                                // Stream on Mobile Data Toggle
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { onToggleMobileData() }
+                                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Row(
+                                        modifier = Modifier.weight(1f),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.CellTower,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary
+                                        )
+                                        Column {
+                                            Text(
+                                                text = "Stream with mobile data",
+                                                style = MaterialTheme.typography.titleSmall,
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            )
+                                            Text(
+                                                text = "Connection: ${networkState.transport.displayLabel} • Works on 4G/5G & Wi-Fi",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+                                    Switch(
+                                        checked = state.settings.streamOnMobileData,
+                                        onCheckedChange = { onToggleMobileData() },
+                                        modifier = Modifier.testTag("settings_mobile_data_switch")
                                     )
                                 }
 

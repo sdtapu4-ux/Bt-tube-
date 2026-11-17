@@ -2,6 +2,9 @@ package com.example.ui
 
 import android.content.Context
 import android.content.Intent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -43,8 +46,10 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -66,6 +71,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.example.R
+import com.example.data.MediaPermissionHelper
 import com.example.model.ShortItem
 import com.example.model.VideoItem
 import com.example.ui.components.BtTubeLogo
@@ -80,6 +86,8 @@ import com.example.ui.screens.VideoPlayerScreen
 import com.example.ui.theme.BtCrimson
 import com.example.ui.theme.BtWhite
 import com.example.ui.viewmodel.BtTubeViewModel
+import com.example.util.NetworkConnectionState
+import com.example.util.NetworkConnectivityHelper
 import kotlinx.coroutines.launch
 
 object BtRoutes {
@@ -155,6 +163,8 @@ fun BtTubeApp(
     val subscribedIds by viewModel.subscribedChannelIds.collectAsStateWithLifecycle()
     val channels by viewModel.channels.collectAsStateWithLifecycle()
     val notifications by viewModel.notifications.collectAsStateWithLifecycle()
+    val isImportingVideos by viewModel.isImportingVideos.collectAsStateWithLifecycle()
+    val settings by viewModel.settings.collectAsStateWithLifecycle()
 
     val channelsById = remember(channels) { channels.associateBy { it.id } }
 
@@ -162,6 +172,82 @@ fun BtTubeApp(
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
     val context = LocalContext.current
+    val networkState by produceState(
+        initialValue = NetworkConnectivityHelper.currentNetworkState(context),
+        context
+    ) {
+        NetworkConnectivityHelper.observeNetworkState(context).collect { value = it }
+    }
+
+    val showMessage: (String) -> Unit = { msg ->
+        coroutineScope.launch {
+            snackbarHostState.currentSnackbarData?.dismiss()
+            snackbarHostState.showSnackbar(msg)
+        }
+    }
+
+    val multiVideoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickMultipleVisualMedia(maxItems = 100)
+    ) { uris ->
+        if (uris.isNotEmpty()) {
+            viewModel.importPhoneVideos(context, uris) { count ->
+                if (count > 0) showMessage("Added $count videos from your phone")
+                else showMessage("Selected videos are already in BT Tube")
+            }
+        }
+    }
+
+    val folderPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { treeUri ->
+        if (treeUri != null) {
+            viewModel.importPhoneFolder(context, treeUri) { count ->
+                if (count > 0) showMessage("Imported $count videos from folder")
+                else showMessage("No new videos found in selected folder")
+            }
+        }
+    }
+
+    val videoPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            viewModel.scanAllMediaStoreVideos(context) { count ->
+                if (count > 0) showMessage("Added $count videos from your phone")
+                else showMessage("All phone videos are already loaded")
+            }
+        } else {
+            showMessage("Permission denied. You can still use Select Videos or Add Folder.")
+        }
+    }
+
+    // Automatically load MediaStore videos if permission is already granted
+    LaunchedEffect(Unit) {
+        if (MediaPermissionHelper.hasVideoStoragePermission(context)) {
+            viewModel.scanAllMediaStoreVideos(context) { }
+        }
+    }
+
+    val launchMediaStoreScan: () -> Unit = {
+        if (MediaPermissionHelper.hasVideoStoragePermission(context)) {
+            viewModel.scanAllMediaStoreVideos(context) { count ->
+                if (count > 0) showMessage("Added $count videos from your phone")
+                else showMessage("All phone videos are already in BT Tube")
+            }
+        } else {
+            videoPermissionLauncher.launch(MediaPermissionHelper.requiredVideoPermission())
+        }
+    }
+
+    val launchMultiVideoImport: () -> Unit = {
+        multiVideoPickerLauncher.launch(
+            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)
+        )
+    }
+
+    val launchFolderImport: () -> Unit = {
+        folderPickerLauncher.launch(null)
+    }
 
     val topLevelRoutes = remember { bottomTabs.map { it.route }.toSet() }
     val showTopLevelNav = currentRoute in topLevelRoutes
@@ -178,13 +264,6 @@ fun BtTubeApp(
             }
             launchSingleTop = true
             restoreState = true
-        }
-    }
-
-    val showMessage: (String) -> Unit = { msg ->
-        coroutineScope.launch {
-            snackbarHostState.currentSnackbarData?.dismiss()
-            snackbarHostState.showSnackbar(msg)
         }
     }
 
@@ -312,11 +391,17 @@ fun BtTubeApp(
                     composable(BtRoutes.HOME) {
                         HomeScreen(
                             homeState = homeState,
+                            isImportingVideos = isImportingVideos,
+                            networkState = networkState,
+                            streamOnMobileData = settings.streamOnMobileData,
                             onSelectCategory = viewModel::selectCategory,
                             onRefresh = viewModel::refreshHomeFeed,
                             onRestoreHidden = viewModel::restoreHiddenVideos,
                             onSearchClick = { navController.navigate(BtRoutes.SEARCH) },
                             onNotificationsClick = { showNotificationsSheet = true },
+                            onScanAllMediaStoreVideos = launchMediaStoreScan,
+                            onImportMultipleVideos = launchMultiVideoImport,
+                            onImportVideoFolder = launchFolderImport,
                             onVideoClick = navigateToPlayer,
                             onChannelClick = { channelId ->
                                 viewModel.selectSubscriptionChannel(channelId)
@@ -357,13 +442,14 @@ fun BtTubeApp(
 
                     composable(BtRoutes.CREATE) {
                         CreateScreen(
-                            onPublishContent = { title, description, category, sceneStyle, isShort ->
+                            onPublishContent = { title, description, category, sceneStyle, isShort, videoUri ->
                                 val newId = viewModel.publishCreatorContent(
                                     title = title,
                                     description = description,
                                     category = category,
                                     sceneStyle = sceneStyle,
-                                    isShort = isShort
+                                    isShort = isShort,
+                                    videoUri = videoUri
                                 )
                                 if (isShort) {
                                     showMessage("Published Short to BT Tube")
@@ -373,7 +459,9 @@ fun BtTubeApp(
                                     viewModel.openVideo(newId)
                                     navController.navigate(BtRoutes.playerRoute(newId))
                                 }
-                            }
+                            },
+                            onImportMultipleVideos = launchMultiVideoImport,
+                            onImportVideoFolder = launchFolderImport
                         )
                     }
 
@@ -399,6 +487,7 @@ fun BtTubeApp(
                     composable(BtRoutes.PROFILE) {
                         ProfileScreen(
                             state = profileState,
+                            networkState = networkState,
                             onSignIn = { email, displayName ->
                                 viewModel.signIn(email, displayName)
                                 showMessage("Signed in to BT Tube")
@@ -408,6 +497,9 @@ fun BtTubeApp(
                                 showMessage("Signed out")
                             },
                             onVideoClick = navigateToPlayer,
+                            onScanAllMediaStoreVideos = launchMediaStoreScan,
+                            onImportMultipleVideos = launchMultiVideoImport,
+                            onImportVideoFolder = launchFolderImport,
                             onClearHistory = {
                                 viewModel.clearWatchHistory()
                                 showMessage("Watch history cleared")
@@ -415,6 +507,10 @@ fun BtTubeApp(
                             onUpdateThemeMode = viewModel::updateThemeMode,
                             onToggleAutoplay = viewModel::toggleAutoplayNext,
                             onToggleNotifications = viewModel::toggleNotificationsEnabled,
+                            onToggleMobileData = {
+                                viewModel.toggleStreamOnMobileData()
+                                showMessage("Updated mobile data streaming preference")
+                            },
                             onUpdateQuality = viewModel::updateDefaultQuality
                         )
                     }
@@ -473,6 +569,7 @@ fun BtTubeApp(
                             onTogglePlayPause = viewModel::togglePlayPause,
                             onSeekTo = viewModel::seekTo,
                             onSeekBy = viewModel::seekBy,
+                            onSyncPosition = viewModel::syncPlaybackPosition,
                             onAdvancePlayback = viewModel::advancePlayback,
                             onSelectSpeed = viewModel::setPlaybackSpeed,
                             onToggleFullscreen = viewModel::toggleFullscreen,

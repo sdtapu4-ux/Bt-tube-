@@ -19,19 +19,28 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.VideoLibrary
+import androidx.compose.material.icons.rounded.AddToQueue
+import androidx.compose.material.icons.rounded.CellTower
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Whatshot
+import androidx.compose.material.icons.rounded.Wifi
+import androidx.compose.material.icons.rounded.WifiOff
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -54,15 +63,23 @@ import com.example.ui.components.VideoFeedCard
 import com.example.ui.theme.BtCrimson
 import com.example.ui.theme.BtWhite
 import com.example.ui.viewmodel.HomeFeedData
+import com.example.util.NetworkConnectionState
+import com.example.util.NetworkTransport
 
 @Composable
 fun HomeScreen(
     homeState: UiState<HomeFeedData>,
+    isImportingVideos: Boolean,
+    networkState: NetworkConnectionState,
+    streamOnMobileData: Boolean,
     onSelectCategory: (VideoCategory) -> Unit,
     onRefresh: () -> Unit,
     onRestoreHidden: () -> Unit,
     onSearchClick: () -> Unit,
     onNotificationsClick: () -> Unit,
+    onScanAllMediaStoreVideos: () -> Unit,
+    onImportMultipleVideos: () -> Unit,
+    onImportVideoFolder: () -> Unit,
     onVideoClick: (VideoItem) -> Unit,
     onChannelClick: (String) -> Unit,
     onToggleWatchLater: (String) -> Unit,
@@ -92,7 +109,52 @@ fun HomeScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    BtTubeLogo(modifier = Modifier.testTag("home_bt_logo"))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        BtTubeLogo(modifier = Modifier.testTag("home_bt_logo"))
+
+                        if (networkState.transport == NetworkTransport.MOBILE_DATA || !networkState.isConnected) {
+                            val badgeIcon = when {
+                                !networkState.isConnected -> Icons.Rounded.WifiOff
+                                networkState.transport == NetworkTransport.MOBILE_DATA -> Icons.Rounded.CellTower
+                                else -> Icons.Rounded.Wifi
+                            }
+                            val badgeText = when {
+                                !networkState.isConnected -> "Offline"
+                                streamOnMobileData -> "Mobile Data"
+                                else -> "Data Paused"
+                            }
+                            Surface(
+                                color = MaterialTheme.colorScheme.surfaceVariant,
+                                shape = RoundedCornerShape(999.dp),
+                                modifier = Modifier.testTag("home_network_badge")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = badgeIcon,
+                                        contentDescription = badgeText,
+                                        tint = if (networkState.isConnected) {
+                                            MaterialTheme.colorScheme.primary
+                                        } else {
+                                            MaterialTheme.colorScheme.onSurfaceVariant
+                                        },
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                    Text(
+                                        text = badgeText,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
 
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -208,6 +270,107 @@ fun HomeScreen(
                             .testTag("home_feed_list"),
                         contentPadding = PaddingValues(bottom = 24.dp)
                     ) {
+                        // Phone Video Library Importer Card
+                        item(key = "device_video_import_banner") {
+                            Surface(
+                                color = MaterialTheme.colorScheme.surface,
+                                shape = RoundedCornerShape(18.dp),
+                                tonalElevation = 2.dp,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 4.dp)
+                                    .testTag("home_import_phone_videos_card")
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(14.dp),
+                                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = if (data.deviceVideosCount > 0) {
+                                                    "My Phone Videos (${data.deviceVideosCount} added)"
+                                                } else {
+                                                    "Add Videos From Your Phone"
+                                                },
+                                                style = MaterialTheme.typography.titleMedium,
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            )
+                                            Text(
+                                                text = "Pick multiple videos or import an entire folder directly into BT Tube.",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                        if (isImportingVideos) {
+                                            CircularProgressIndicator(
+                                                modifier = Modifier.size(22.dp),
+                                                strokeWidth = 2.5.dp,
+                                                color = MaterialTheme.colorScheme.primary
+                                            )
+                                        }
+                                    }
+
+                                    Button(
+                                        onClick = onScanAllMediaStoreVideos,
+                                        enabled = !isImportingVideos,
+                                        shape = RoundedCornerShape(12.dp),
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = MaterialTheme.colorScheme.primary
+                                        ),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .testTag("scan_all_videos_button")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.AddToQueue,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Spacer(modifier = Modifier.size(8.dp))
+                                        Text("Load All Phone Videos", maxLines = 1)
+                                    }
+
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                    ) {
+                                        OutlinedButton(
+                                            onClick = onImportMultipleVideos,
+                                            enabled = !isImportingVideos,
+                                            shape = RoundedCornerShape(12.dp),
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .testTag("import_select_videos_button")
+                                        ) {
+                                            Text("Select Videos", maxLines = 1)
+                                        }
+
+                                        OutlinedButton(
+                                            onClick = onImportVideoFolder,
+                                            enabled = !isImportingVideos,
+                                            shape = RoundedCornerShape(12.dp),
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .testTag("import_folder_button")
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Outlined.FolderOpen,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(17.dp)
+                                            )
+                                            Spacer(modifier = Modifier.size(6.dp))
+                                            Text("Add Folder", maxLines = 1)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         // Trending Video Section
                         if (data.selectedCategory == VideoCategory.ALL && data.trendingVideos.isNotEmpty()) {
                             item(key = "trending_header") {

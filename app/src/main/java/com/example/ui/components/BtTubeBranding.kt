@@ -20,11 +20,14 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.PlayCircleFilled
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -33,10 +36,13 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -44,7 +50,9 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
+import com.example.data.LocalVideoScanner
 import com.example.model.Channel
+import com.example.model.StudioSceneStyle
 import com.example.model.ThumbnailArtwork
 import com.example.ui.theme.BtCrimson
 import com.example.ui.theme.BtCrimsonBright
@@ -225,6 +233,39 @@ fun VideoThumbnailSurface(
                     artwork = artwork,
                     modifier = Modifier.fillMaxSize()
                 )
+            }
+            is ThumbnailArtwork.LocalVideoFrame -> {
+                val context = LocalContext.current
+                val bitmap by produceState<ImageBitmap?>(initialValue = null, key1 = artwork.uriString) {
+                    value = LocalVideoScanner.loadVideoThumbnailBitmap(context, artwork.uriString)
+                        ?.asImageBitmap()
+                }
+                if (bitmap != null) {
+                    Image(
+                        bitmap = bitmap!!,
+                        contentDescription = contentDescription,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop
+                    )
+                } else {
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        StudioVectorArtwork(
+                            artwork = ThumbnailArtwork.VectorScene(
+                                StudioSceneStyle.CRIMSON_STUDIO,
+                                "DEVICE VIDEO"
+                            ),
+                            modifier = Modifier.fillMaxSize()
+                        )
+                        Icon(
+                            imageVector = Icons.Rounded.PlayCircleFilled,
+                            contentDescription = null,
+                            tint = BtWhite.copy(alpha = 0.85f),
+                            modifier = Modifier
+                                .align(Alignment.Center)
+                                .size(48.dp)
+                        )
+                    }
+                }
             }
         }
 

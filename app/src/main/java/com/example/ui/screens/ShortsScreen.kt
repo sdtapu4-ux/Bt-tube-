@@ -1,5 +1,10 @@
 package com.example.ui.screens
 
+import android.media.AudioManager
+import android.media.MediaPlayer
+import android.net.Uri
+import android.os.Build
+import android.widget.VideoView
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -42,8 +47,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -57,12 +64,14 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import com.example.R
 import com.example.model.Channel
 import com.example.model.ShortItem
@@ -74,6 +83,7 @@ import com.example.ui.theme.BtCrimsonBright
 import com.example.ui.theme.BtWhite
 import com.example.ui.theme.OutfitFontFamily
 import com.example.util.FormatUtils
+import com.example.util.VideoAudioHelper
 import kotlinx.coroutines.delay
 import kotlin.math.sin
 
@@ -209,6 +219,27 @@ private fun ShortPageItem(
 ) {
     var isPlaying by remember(short.id) { mutableStateOf(true) }
     var elapsed by remember(short.id) { mutableFloatStateOf(0f) }
+    val context = LocalContext.current
+
+    DisposableEffect(isActive, isPlaying, isMuted, short.id) {
+        val abandonFocus = if (isActive && isPlaying && !isMuted) {
+            VideoAudioHelper.requestMediaAudioFocus(context)
+        } else {
+            {}
+        }
+        onDispose {
+            abandonFocus()
+        }
+    }
+
+    LaunchedEffect(isActive, isPlaying, isMuted, short.id, short.videoUri) {
+        if (short.videoUri == null && isActive && isPlaying && !isMuted) {
+            VideoAudioHelper.playAmbientSoundtrack(
+                seedKey = short.id,
+                playbackSpeed = 1.0f
+            )
+        }
+    }
 
     LaunchedEffect(isActive, isPlaying) {
         if (!isActive) {
@@ -233,23 +264,32 @@ private fun ShortPageItem(
             .clickable { isPlaying = !isPlaying }
             .testTag("short_page_${short.id}")
     ) {
-        val motionScale = if (isActive && isPlaying) {
-            1.04f + 0.03f * sin(elapsed * 0.6f)
+        if (short.videoUri != null) {
+            ShortLocalVideoStage(
+                uriString = short.videoUri,
+                shouldPlay = isActive && isPlaying,
+                isMuted = isMuted,
+                modifier = Modifier.fillMaxSize()
+            )
         } else {
-            1.02f
-        }
+            val motionScale = if (isActive && isPlaying) {
+                1.04f + 0.03f * sin(elapsed * 0.6f)
+            } else {
+                1.02f
+            }
 
-        VideoThumbnailSurface(
-            artwork = short.artwork,
-            contentDescription = short.title,
-            aspectRatio = null,
-            modifier = Modifier
-                .fillMaxSize()
-                .graphicsLayer(
-                    scaleX = motionScale,
-                    scaleY = motionScale
-                )
-        )
+            VideoThumbnailSurface(
+                artwork = short.artwork,
+                contentDescription = short.title,
+                aspectRatio = null,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer(
+                        scaleX = motionScale,
+                        scaleY = motionScale
+                    )
+            )
+        }
 
         // Contrast Scrim for vertical controls and creator info
         Box(
@@ -477,6 +517,69 @@ private fun ShortRailAction(
             style = MaterialTheme.typography.labelMedium,
             color = BtWhite,
             fontWeight = FontWeight.SemiBold
+        )
+    }
+}
+
+@Composable
+private fun ShortLocalVideoStage(
+    uriString: String,
+    shouldPlay: Boolean,
+    isMuted: Boolean,
+    modifier: Modifier = Modifier
+) {
+    var videoViewRef by remember(uriString) { mutableStateOf<VideoView?>(null) }
+    var mediaPlayerRef by remember(uriString) { mutableStateOf<MediaPlayer?>(null) }
+
+    DisposableEffect(uriString) {
+        onDispose {
+            runCatching { videoViewRef?.stopPlayback() }
+            mediaPlayerRef = null
+        }
+    }
+
+    LaunchedEffect(shouldPlay, videoViewRef) {
+        val vv = videoViewRef ?: return@LaunchedEffect
+        runCatching {
+            if (shouldPlay && !vv.isPlaying) vv.start()
+            else if (!shouldPlay && vv.isPlaying) vv.pause()
+        }
+    }
+
+    LaunchedEffect(isMuted, mediaPlayerRef) {
+        val mp = mediaPlayerRef ?: return@LaunchedEffect
+        val volume = if (isMuted) 0f else 1f
+        runCatching { mp.setVolume(volume, volume) }
+    }
+
+    key(uriString) {
+        AndroidView(
+            modifier = modifier,
+            factory = { context ->
+                VideoView(context).apply {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        runCatching {
+                            setAudioFocusRequest(AudioManager.AUDIOFOCUS_GAIN)
+                            setAudioAttributes(VideoAudioHelper.mediaAudioAttributes())
+                        }
+                    }
+                    setVideoURI(Uri.parse(uriString))
+                    setOnPreparedListener { mp ->
+                        mediaPlayerRef = mp
+                        mp.isLooping = true
+                        runCatching {
+                            mp.setAudioAttributes(VideoAudioHelper.mediaAudioAttributes())
+                        }
+                        val volume = if (isMuted) 0f else 1f
+                        runCatching { mp.setVolume(volume, volume) }
+                        if (shouldPlay) start()
+                    }
+                    videoViewRef = this
+                }
+            },
+            update = { view ->
+                videoViewRef = view
+            }
         )
     }
 }

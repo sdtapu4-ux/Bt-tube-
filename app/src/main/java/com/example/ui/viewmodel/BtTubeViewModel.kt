@@ -1,8 +1,11 @@
 package com.example.ui.viewmodel
 
+import android.content.Context
+import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.BtTubeRepository
+import com.example.data.LocalVideoScanner
 import com.example.model.AppSettings
 import com.example.model.Channel
 import com.example.model.NotificationItem
@@ -32,7 +35,8 @@ data class HomeFeedData(
     val channelsById: Map<String, Channel> = emptyMap(),
     val subscribedChannelIds: Set<String> = emptySet(),
     val watchLaterIds: Set<String> = emptySet(),
-    val unreadNotificationsCount: Int = 0
+    val unreadNotificationsCount: Int = 0,
+    val deviceVideosCount: Int = 0
 )
 
 data class PlayerUiState(
@@ -82,6 +86,7 @@ data class ProfileUiState(
     val likedVideos: List<VideoItem> = emptyList(),
     val watchLaterVideos: List<VideoItem> = emptyList(),
     val uploadedVideos: List<VideoItem> = emptyList(),
+    val deviceVideos: List<VideoItem> = emptyList(),
     val channelsById: Map<String, Channel> = emptyMap()
 )
 
@@ -98,6 +103,8 @@ class BtTubeViewModel(
     private val _hasSubmittedSearch = MutableStateFlow(false)
 
     private val _selectedSubscriptionChannelId = MutableStateFlow<String?>(null)
+    private val _isImportingVideos = MutableStateFlow(false)
+    val isImportingVideos: StateFlow<Boolean> = _isImportingVideos.asStateFlow()
 
     private val _activeVideoId = MutableStateFlow<String?>(null)
     private val _isPlaying = MutableStateFlow(true)
@@ -165,7 +172,8 @@ class BtTubeViewModel(
                         channelsById = channelList.associateBy { it.id },
                         subscribedChannelIds = subIds,
                         watchLaterIds = watchLater,
-                        unreadNotificationsCount = notifs.count { !it.isRead }
+                        unreadNotificationsCount = notifs.count { !it.isRead },
+                        deviceVideosCount = visibleVideos.count { it.videoUri != null }
                     )
                 )
             }
@@ -405,7 +413,8 @@ class BtTubeViewModel(
             watchHistoryVideos = historyIds.mapNotNull { videosById[it] },
             likedVideos = allVideos.filter { it.id in likedIds },
             watchLaterVideos = allVideos.filter { it.id in watchLater },
-            uploadedVideos = allVideos.filter { it.isUserCreated },
+            uploadedVideos = allVideos.filter { it.isUserCreated && it.videoUri == null },
+            deviceVideos = allVideos.filter { it.videoUri != null },
             channelsById = allChannels.associateBy { it.id }
         )
     }.stateIn(
@@ -455,6 +464,10 @@ class BtTubeViewModel(
     fun seekBy(deltaSeconds: Float) {
         val duration = playerState.value.video?.durationSeconds?.toFloat() ?: 1f
         _currentPositionSeconds.update { (it + deltaSeconds).coerceIn(0f, duration) }
+    }
+
+    fun syncPlaybackPosition(seconds: Float) {
+        _currentPositionSeconds.value = seconds.coerceAtLeast(0f)
     }
 
     fun advancePlayback(deltaSeconds: Float) {
@@ -584,6 +597,10 @@ class BtTubeViewModel(
         repository.toggleNotificationsEnabled()
     }
 
+    fun toggleStreamOnMobileData() {
+        repository.toggleStreamOnMobileData()
+    }
+
     fun updateDefaultQuality(quality: PlaybackQuality) {
         repository.updateDefaultQuality(quality)
     }
@@ -593,15 +610,59 @@ class BtTubeViewModel(
         description: String,
         category: VideoCategory,
         sceneStyle: StudioSceneStyle,
-        isShort: Boolean
+        isShort: Boolean,
+        videoUri: String? = null
     ): String {
         return repository.publishVideo(
             title = title,
             description = description,
             category = category,
             sceneStyle = sceneStyle,
-            isShort = isShort
+            isShort = isShort,
+            videoUri = videoUri
         )
+    }
+
+    fun importPhoneVideos(
+        context: Context,
+        uris: List<Uri>,
+        onComplete: (Int) -> Unit
+    ) {
+        if (uris.isEmpty()) return
+        viewModelScope.launch {
+            _isImportingVideos.value = true
+            val extracted = LocalVideoScanner.extractMetadataFromUris(context, uris)
+            val addedCount = repository.importDeviceVideos(extracted)
+            _isImportingVideos.value = false
+            onComplete(addedCount)
+        }
+    }
+
+    fun importPhoneFolder(
+        context: Context,
+        treeUri: Uri,
+        onComplete: (Int) -> Unit
+    ) {
+        viewModelScope.launch {
+            _isImportingVideos.value = true
+            val extracted = LocalVideoScanner.scanFolderTree(context, treeUri)
+            val addedCount = repository.importDeviceVideos(extracted)
+            _isImportingVideos.value = false
+            onComplete(addedCount)
+        }
+    }
+
+    fun scanAllMediaStoreVideos(
+        context: Context,
+        onComplete: (Int) -> Unit
+    ) {
+        viewModelScope.launch {
+            _isImportingVideos.value = true
+            val discovered = LocalVideoScanner.scanAllMediaStoreVideos(context)
+            val addedCount = repository.importDeviceVideos(discovered)
+            _isImportingVideos.value = false
+            onComplete(addedCount)
+        }
     }
 
     fun getChannelSync(channelId: String): Channel = repository.getChannel(channelId)
