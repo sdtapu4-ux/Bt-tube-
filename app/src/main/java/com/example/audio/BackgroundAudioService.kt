@@ -16,12 +16,16 @@ import android.media.AudioManager
 import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
+import android.os.ParcelFileDescriptor
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.example.MainActivity
 import com.example.R
+import com.example.player.UniversalMediaEngine
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -34,6 +38,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import org.videolan.libvlc.LibVLC
+import org.videolan.libvlc.MediaPlayer as VlcMediaPlayer
 
 data class BackgroundAudioTrack(
     val id: String,
@@ -145,9 +151,15 @@ object BackgroundAudioController {
 class BackgroundAudioService : Service() {
 
     private var mediaPlayer: MediaPlayer? = null
+    private var libVLC: LibVLC? = null
+    private var vlcPlayer: VlcMediaPlayer? = null
+    private var vlcPfd: ParcelFileDescriptor? = null
+    private var wakeLock: PowerManager.WakeLock? = null
+
     private var audioFocusRequest: AudioFocusRequest? = null
     private var noisyReceiverRegistered = false
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val mainHandler = Handler(Looper.getMainLooper())
     private var tickerJob: Job? = null
 
     private val noisyReceiver = object : BroadcastReceiver() {
@@ -163,9 +175,11 @@ class BackgroundAudioService : Service() {
             AudioManager.AUDIOFOCUS_LOSS,
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> pausePlayback()
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
+                runCatching { vlcPlayer?.volume = 25 }
                 runCatching { mediaPlayer?.setVolume(0.25f, 0.25f) }
             }
             AudioManager.AUDIOFOCUS_GAIN -> {
+                runCatching { vlcPlayer?.volume = 100 }
                 runCatching { mediaPlayer?.setVolume(1f, 1f) }
             }
         }
@@ -195,25 +209,41 @@ class BackgroundAudioService : Service() {
                 prepareAndPlayCurrentTrack(startMs = seekMs, playbackSpeed = speed)
             }
             ACTION_TOGGLE_PLAY_PAUSE -> {
+                val vlc = vlcPlayer
                 val mp = mediaPlayer
-                if (mp != null) {
-                    if (mp.isPlaying) pausePlayback() else resumePlayback()
-                } else {
-                    val state = BackgroundAudioController.state.value
-                    if (state.currentTrack != null) {
-                        prepareAndPlayCurrentTrack(
-                            startMs = (state.positionSeconds * 1000f).toInt(),
-                            playbackSpeed = state.playbackSpeed
-                        )
+                when {
+                    vlc != null -> if (runCatching { vlc.isPlaying }.getOrDefault(false)) pausePlayback() else resumePlayback()
+                    mp != null -> if (runCatching { mp.isPlaying }.getOrDefault(false)) pausePlayback() else resumePlayback()
+                    else -> {
+                        val state = BackgroundAudioController.state.value
+                        if (state.currentTrack != null) {
+                            prepareAndPlayCurrentTrack(
+                                startMs = (state.positionSeconds * 1000f).toInt(),
+                                playbackSpeed = state.playbackSpeed
+                            )
+                        }
                     }
                 }
             }
             ACTION_SEEK -> {
                 val seekMs = intent.getIntExtra(EXTRA_SEEK_MS, 0)
+                runCatching {
+                    vlcPlayer?.let { vp ->
+                        if (vp.isSeekable) {
+                            vp.time = seekMs.toLong().coerceAtLeast(0L)
+                        } else {
+                            val len = vp.length
+                            if (len > 0L) {
+                                vp.position = (seekMs.toFloat() / len.toFloat()).coerceIn(0f, 1f)
+                            }
+                        }
+                    }
+                }
                 runCatching { mediaPlayer?.seekTo(seekMs) }
             }
             ACTION_SET_SPEED -> {
                 val speed = intent.getFloatExtra(EXTRA_SPEED, 1.0f)
+                runCatching { vlcPlayer?.rate = speed }
                 runCatching {
                     mediaPlayer?.let { mp ->
                         val params = mp.playbackParams
@@ -238,8 +268,106 @@ class BackgroundAudioService : Service() {
     private fun prepareAndPlayCurrentTrack(startMs: Int, playbackSpeed: Float) {
         val track = BackgroundAudioController.state.value.currentTrack ?: return
         requestAudioFocus()
+        acquireWakeLock()
         releasePlayer()
 
+        if (!UniversalMediaEngine.isRunningUnderRobolectric()) {
+            val startedVlc = prepareWithLibVlc(track, startMs, playbackSpeed)
+            if (startedVlc) return
+        }
+
+        prepareWithAndroidMediaPlayer(track, startMs, playbackSpeed)
+    }
+
+    private fun prepareWithLibVlc(
+        track: BackgroundAudioTrack,
+        startMs: Int,
+        playbackSpeed: Float
+    ): Boolean {
+        return runCatching {
+            val vlc = UniversalMediaEngine.createLibVlc(
+                context = applicationContext,
+                noVideo = true,
+                forceSoftwareDecode = true
+            )
+            libVLC = vlc
+            val player = VlcMediaPlayer(vlc)
+            vlcPlayer = player
+
+            var fallbackTriggered = false
+            var initialSeekPending = startMs > 0
+
+            player.setEventListener { event ->
+                mainHandler.post {
+                    when (event.type) {
+                        VlcMediaPlayer.Event.Playing -> {
+                            val lenMs = runCatching { player.length }.getOrDefault(0L)
+                            val durSec = if (lenMs > 0L) {
+                                (lenMs / 1000L).toInt().coerceAtLeast(1)
+                            } else {
+                                track.durationSeconds.coerceAtLeast(1)
+                            }
+                            if (initialSeekPending) {
+                                initialSeekPending = false
+                                runCatching {
+                                    if (player.isSeekable) {
+                                        player.time = startMs.toLong()
+                                    }
+                                }
+                            }
+                            runCatching {
+                                player.volume = 100
+                                player.rate = playbackSpeed
+                            }
+                            BackgroundAudioController.updateState {
+                                it.copy(isPlaying = true, durationSeconds = durSec)
+                            }
+                            startPositionTicker()
+                            updateNotification()
+                        }
+
+                        VlcMediaPlayer.Event.EndReached -> {
+                            playAdjacentTrack(step = 1)
+                        }
+
+                        VlcMediaPlayer.Event.EncounteredError -> {
+                            if (!fallbackTriggered) {
+                                fallbackTriggered = true
+                                releasePlayer()
+                                prepareWithAndroidMediaPlayer(track, startMs, playbackSpeed)
+                            } else {
+                                BackgroundAudioController.updateState { it.copy(isPlaying = false) }
+                                updateNotification()
+                            }
+                        }
+
+                        else -> Unit
+                    }
+                }
+            }
+
+            val opened = UniversalMediaEngine.openMedia(
+                context = applicationContext,
+                libVLC = vlc,
+                uriString = track.uriString,
+                forceSoftwareDecode = true,
+                startTimeSeconds = startMs / 1000f
+            )
+            vlcPfd = opened.fileDescriptor
+            player.media = opened.media
+            opened.media.release()
+            player.volume = 100
+            player.rate = playbackSpeed
+            player.play()
+            true
+        }.getOrDefault(false)
+    }
+
+    private fun prepareWithAndroidMediaPlayer(
+        track: BackgroundAudioTrack,
+        startMs: Int,
+        playbackSpeed: Float
+    ) {
         val mp = MediaPlayer()
         mediaPlayer = mp
         runCatching {
@@ -311,17 +439,30 @@ class BackgroundAudioService : Service() {
 
     private fun pausePlayback() {
         runCatching {
+            if (vlcPlayer?.isPlaying == true) {
+                vlcPlayer?.pause()
+            }
+        }
+        runCatching {
             if (mediaPlayer?.isPlaying == true) {
                 mediaPlayer?.pause()
             }
         }
         tickerJob?.cancel()
+        releaseWakeLock()
         BackgroundAudioController.updateState { it.copy(isPlaying = false) }
         updateNotification()
     }
 
     private fun resumePlayback() {
         requestAudioFocus()
+        acquireWakeLock()
+        runCatching {
+            vlcPlayer?.let { vp ->
+                vp.volume = 100
+                vp.play()
+            }
+        }
         runCatching {
             mediaPlayer?.setVolume(1f, 1f)
             mediaPlayer?.start()
@@ -335,12 +476,38 @@ class BackgroundAudioService : Service() {
         tickerJob?.cancel()
         tickerJob = serviceScope.launch {
             while (isActive) {
+                val vp = vlcPlayer
                 val mp = mediaPlayer
-                if (mp != null && runCatching { mp.isPlaying }.getOrDefault(false)) {
+                if (vp != null && runCatching { vp.isPlaying }.getOrDefault(false)) {
+                    val timeMs = runCatching { vp.time }.getOrDefault(-1L)
+                    if (timeMs >= 0L) {
+                        BackgroundAudioController.updateState { it.copy(positionSeconds = timeMs / 1000f) }
+                    }
+                } else if (mp != null && runCatching { mp.isPlaying }.getOrDefault(false)) {
                     val posSec = runCatching { mp.currentPosition / 1000f }.getOrDefault(0f)
                     BackgroundAudioController.updateState { it.copy(positionSeconds = posSec) }
                 }
                 delay(300L)
+            }
+        }
+    }
+
+    private fun acquireWakeLock() {
+        runCatching {
+            if (wakeLock?.isHeld == true) return
+            val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return
+            wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "BTTube::BackgroundAudioWakeLock")
+                .apply {
+                    setReferenceCounted(false)
+                    acquire(4 * 60 * 60 * 1000L)
+                }
+        }
+    }
+
+    private fun releaseWakeLock() {
+        runCatching {
+            if (wakeLock?.isHeld == true) {
+                wakeLock?.release()
             }
         }
     }
@@ -476,6 +643,19 @@ class BackgroundAudioService : Service() {
     private fun releasePlayer() {
         tickerJob?.cancel()
         runCatching {
+            vlcPlayer?.let { vp ->
+                vp.setEventListener(null)
+                if (vp.isPlaying) vp.stop()
+                vp.release()
+            }
+        }
+        vlcPlayer = null
+        runCatching { libVLC?.release() }
+        libVLC = null
+        runCatching { vlcPfd?.close() }
+        vlcPfd = null
+
+        runCatching {
             mediaPlayer?.let { mp ->
                 if (mp.isPlaying) mp.stop()
                 mp.reset()
@@ -496,6 +676,7 @@ class BackgroundAudioService : Service() {
 
     override fun onDestroy() {
         releasePlayer()
+        releaseWakeLock()
         abandonAudioFocus()
         if (noisyReceiverRegistered) {
             runCatching { unregisterReceiver(noisyReceiver) }

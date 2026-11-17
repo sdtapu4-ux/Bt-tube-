@@ -1,10 +1,6 @@
 package com.example.ui.screens
 
-import android.media.AudioManager
-import android.media.MediaPlayer
 import android.net.Uri
-import android.os.Build
-import android.widget.VideoView
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -44,6 +40,7 @@ import androidx.compose.material.icons.outlined.BookmarkAdded
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.ThumbDown
 import androidx.compose.material.icons.outlined.ThumbUp
+import androidx.compose.material.icons.rounded.AspectRatio
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Forward10
@@ -62,6 +59,7 @@ import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.ThumbDown
 import androidx.compose.material.icons.rounded.ThumbUp
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.Videocam
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -79,7 +77,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -99,11 +96,13 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
 import com.example.R
 import com.example.audio.BackgroundAudioState
 import com.example.model.PlaybackQuality
 import com.example.model.VideoItem
+import com.example.player.MediaTrackOption
+import com.example.player.UniversalVlcVideoSurface
+import com.example.player.VideoAspectMode
 import com.example.ui.components.ChannelAvatar
 import com.example.ui.components.CommentsBottomSheet
 import com.example.ui.components.CompactVideoRowCard
@@ -707,6 +706,13 @@ private fun VideoPlaybackStage(
 ) {
     var speedMenuExpanded by remember { mutableStateOf(false) }
     var qualityMenuExpanded by remember { mutableStateOf(false) }
+    var tracksMenuExpanded by remember { mutableStateOf(false) }
+    var aspectMode by remember(video.id) { mutableStateOf(VideoAspectMode.FIT) }
+    var forceSoftwareDecode by remember(video.id) { mutableStateOf(false) }
+    var videoTracks by remember(video.id) { mutableStateOf<List<MediaTrackOption>>(emptyList()) }
+    var audioTracks by remember(video.id) { mutableStateOf<List<MediaTrackOption>>(emptyList()) }
+    var selectedVideoTrackId by remember(video.id) { mutableStateOf<Int?>(null) }
+    var selectedAudioTrackId by remember(video.id) { mutableStateOf<Int?>(null) }
     val duration = durationSeconds.toFloat().coerceAtLeast(1f)
     val speedOptions = listOf(0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f)
 
@@ -801,14 +807,24 @@ private fun VideoPlaybackStage(
                 }
             }
         } else if (video.videoUri != null) {
-            RealLocalVideoSurface(
+            UniversalVlcVideoSurface(
                 uriString = video.videoUri,
                 isPlaying = isPlaying,
                 isMuted = isMuted,
                 playbackSpeed = playbackSpeed,
+                selectedQuality = selectedQuality,
+                aspectMode = aspectMode,
+                forceSoftwareDecode = forceSoftwareDecode,
+                selectedVideoTrackId = selectedVideoTrackId,
+                selectedAudioTrackId = selectedAudioTrackId,
                 pendingSeekSeconds = pendingSeekSeconds,
                 onConsumePendingSeek = onConsumePendingSeek,
                 onPositionUpdate = onSyncPosition,
+                onTracksDiscovered = { vTracks, aTracks ->
+                    videoTracks = vTracks
+                    audioTracks = aTracks
+                },
+                onRequestSoftwareDecode = { forceSoftwareDecode = true },
                 onSwitchToAudioFallback = { if (!isAudioMode) onToggleAudioMode() },
                 modifier = Modifier.fillMaxSize()
             )
@@ -980,6 +996,148 @@ private fun VideoPlaybackStage(
                             }
                         }
 
+                        // All-Format Video/Audio Tracks + SW Decoder Selector
+                        if (!isAudioMode && !video.isAudioOnly && video.videoUri != null) {
+                            Box {
+                                Surface(
+                                    color = if (videoTracks.size > 1 || forceSoftwareDecode) {
+                                        BtCrimson.copy(alpha = 0.85f)
+                                    } else {
+                                        Color.Black.copy(alpha = 0.55f)
+                                    },
+                                    shape = RoundedCornerShape(999.dp),
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(999.dp))
+                                        .clickable { tracksMenuExpanded = true }
+                                        .testTag("player_tracks_button")
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(3.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.Tune,
+                                            contentDescription = "Video & Audio Tracks",
+                                            tint = BtWhite,
+                                            modifier = Modifier.size(15.dp)
+                                        )
+                                        if (videoTracks.size > 1) {
+                                            Text(
+                                                text = "${videoTracks.size}T",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = BtWhite,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                    }
+                                }
+
+                                DropdownMenu(
+                                    expanded = tracksMenuExpanded,
+                                    onDismissRequest = { tracksMenuExpanded = false }
+                                ) {
+                                    if (videoTracks.isNotEmpty()) {
+                                        DropdownMenuItem(
+                                            text = {
+                                                Text(
+                                                    text = "Video Tracks",
+                                                    style = MaterialTheme.typography.labelMedium,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = MaterialTheme.colorScheme.primary
+                                                )
+                                            },
+                                            onClick = {},
+                                            enabled = false
+                                        )
+                                        videoTracks.forEach { track ->
+                                            val isSelected = selectedVideoTrackId?.let { it == track.id } ?: track.isSelected
+                                            DropdownMenuItem(
+                                                text = {
+                                                    Text(
+                                                        text = track.label,
+                                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                                        color = if (isSelected) BtCrimson else MaterialTheme.colorScheme.onSurface
+                                                    )
+                                                },
+                                                onClick = {
+                                                    selectedVideoTrackId = track.id
+                                                    tracksMenuExpanded = false
+                                                }
+                                            )
+                                        }
+                                        HorizontalDivider()
+                                    }
+                                    if (audioTracks.isNotEmpty()) {
+                                        DropdownMenuItem(
+                                            text = {
+                                                Text(
+                                                    text = "Audio Tracks",
+                                                    style = MaterialTheme.typography.labelMedium,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = MaterialTheme.colorScheme.primary
+                                                )
+                                            },
+                                            onClick = {},
+                                            enabled = false
+                                        )
+                                        audioTracks.forEach { track ->
+                                            val isSelected = selectedAudioTrackId?.let { it == track.id } ?: track.isSelected
+                                            DropdownMenuItem(
+                                                text = {
+                                                    Text(
+                                                        text = track.label,
+                                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                                        color = if (isSelected) BtCrimson else MaterialTheme.colorScheme.onSurface
+                                                    )
+                                                },
+                                                onClick = {
+                                                    selectedAudioTrackId = track.id
+                                                    tracksMenuExpanded = false
+                                                }
+                                            )
+                                        }
+                                        HorizontalDivider()
+                                    }
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                text = "Aspect: ${aspectMode.label} (Tap to cycle)",
+                                                fontWeight = FontWeight.Medium
+                                            )
+                                        },
+                                        leadingIcon = {
+                                            Icon(
+                                                imageVector = Icons.Rounded.AspectRatio,
+                                                contentDescription = null
+                                            )
+                                        },
+                                        onClick = {
+                                            val modes = VideoAspectMode.entries
+                                            aspectMode = modes[(aspectMode.ordinal + 1) % modes.size]
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                text = if (forceSoftwareDecode) {
+                                                    "All-Format SW Decoder: ON"
+                                                } else {
+                                                    "All-Format SW Decoder: Auto"
+                                                },
+                                                fontWeight = if (forceSoftwareDecode) FontWeight.Bold else FontWeight.Normal,
+                                                color = if (forceSoftwareDecode) BtCrimson else MaterialTheme.colorScheme.onSurface
+                                            )
+                                        },
+                                        onClick = {
+                                            forceSoftwareDecode = !forceSoftwareDecode
+                                            tracksMenuExpanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+
                         // Video Quality Selector (All SD: 144p, 240p, 360p, 480p + HD + Auto)
                         if (!video.isAudioOnly) {
                             Box {
@@ -992,7 +1150,7 @@ private fun VideoPlaybackStage(
                                         .testTag("player_quality_button")
                                 ) {
                                     Row(
-                                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp),
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
                                         verticalAlignment = Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.spacedBy(4.dp)
                                     ) {
@@ -1046,7 +1204,7 @@ private fun VideoPlaybackStage(
                                     .testTag("playback_speed_button")
                             ) {
                                 Row(
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                                 ) {
@@ -1313,144 +1471,4 @@ private fun ActionPillButton(
     }
 }
 
-@Composable
-private fun RealLocalVideoSurface(
-    uriString: String,
-    isPlaying: Boolean,
-    isMuted: Boolean,
-    playbackSpeed: Float,
-    pendingSeekSeconds: Float?,
-    onConsumePendingSeek: () -> Unit,
-    onPositionUpdate: (Float) -> Unit,
-    onSwitchToAudioFallback: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    var videoViewRef by remember(uriString) { mutableStateOf<VideoView?>(null) }
-    var mediaPlayerRef by remember(uriString) { mutableStateOf<MediaPlayer?>(null) }
-    var videoCodecError by remember(uriString) { mutableStateOf(false) }
 
-    DisposableEffect(uriString) {
-        onDispose {
-            runCatching { videoViewRef?.stopPlayback() }
-            mediaPlayerRef = null
-        }
-    }
-
-    LaunchedEffect(isPlaying, videoViewRef) {
-        val vv = videoViewRef ?: return@LaunchedEffect
-        runCatching {
-            if (isPlaying && !vv.isPlaying) vv.start()
-            else if (!isPlaying && vv.isPlaying) vv.pause()
-        }
-    }
-
-    LaunchedEffect(isMuted, mediaPlayerRef) {
-        val mp = mediaPlayerRef ?: return@LaunchedEffect
-        val volume = if (isMuted) 0f else 1f
-        runCatching { mp.setVolume(volume, volume) }
-    }
-
-    LaunchedEffect(playbackSpeed, mediaPlayerRef) {
-        val mp = mediaPlayerRef ?: return@LaunchedEffect
-        runCatching {
-            val params = mp.playbackParams
-            params.speed = playbackSpeed
-            mp.playbackParams = params
-        }
-    }
-
-    LaunchedEffect(pendingSeekSeconds, videoViewRef) {
-        val target = pendingSeekSeconds ?: return@LaunchedEffect
-        val vv = videoViewRef ?: return@LaunchedEffect
-        runCatching {
-            vv.seekTo((target * 1000f).toInt())
-        }
-        onConsumePendingSeek()
-    }
-
-    LaunchedEffect(isPlaying, videoViewRef, uriString) {
-        while (isPlaying) {
-            val vv = videoViewRef
-            if (vv != null) {
-                runCatching {
-                    onPositionUpdate(vv.currentPosition / 1000f)
-                }
-            }
-            delay(250L)
-        }
-    }
-
-    Box(modifier = modifier) {
-        key(uriString) {
-            AndroidView(
-                modifier = Modifier.fillMaxSize(),
-                factory = { context ->
-                    VideoView(context).apply {
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                            runCatching {
-                                setAudioFocusRequest(AudioManager.AUDIOFOCUS_GAIN)
-                                setAudioAttributes(VideoAudioHelper.mediaAudioAttributes())
-                            }
-                        }
-                        setVideoURI(Uri.parse(uriString))
-                        setOnPreparedListener { mp ->
-                            videoCodecError = false
-                            mediaPlayerRef = mp
-                            runCatching {
-                                mp.setVideoScalingMode(MediaPlayer.VIDEO_SCALING_MODE_SCALE_TO_FIT)
-                                mp.setAudioAttributes(VideoAudioHelper.mediaAudioAttributes())
-                            }
-                            val volume = if (isMuted) 0f else 1f
-                            runCatching { mp.setVolume(volume, volume) }
-                            runCatching {
-                                val params = mp.playbackParams
-                                params.speed = playbackSpeed
-                                mp.playbackParams = params
-                            }
-                            if (isPlaying) start()
-                        }
-                        setOnErrorListener { _, _, _ ->
-                            videoCodecError = true
-                            true
-                        }
-                        setOnCompletionListener {
-                            runCatching { onPositionUpdate(duration / 1000f) }
-                        }
-                        videoViewRef = this
-                    }
-                },
-                update = { view ->
-                    videoViewRef = view
-                }
-            )
-        }
-
-        if (videoCodecError) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.85f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.padding(16.dp)
-                ) {
-                    Text(
-                        text = "SD video track requires audio-only mode on this device",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = BtWhite
-                    )
-                    Button(
-                        onClick = onSwitchToAudioFallback,
-                        colors = ButtonDefaults.buttonColors(containerColor = BtCrimson),
-                        modifier = Modifier.testTag("video_fallback_audio_button")
-                    ) {
-                        Text("Play Audio Track")
-                    }
-                }
-            }
-        }
-    }
-}

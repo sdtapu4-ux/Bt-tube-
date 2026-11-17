@@ -22,6 +22,8 @@ import com.example.data.LocalVideoScanner
 import com.example.data.MediaPermissionHelper
 import com.example.model.AppSettings
 import com.example.model.PlaybackQuality
+import com.example.player.MediaTrackOption
+import com.example.player.MediaTrackSelectionHelper
 import com.example.ui.BtTubeApp
 import com.example.ui.screens.GmailAuthScreen
 import com.example.ui.theme.BtTubeTheme
@@ -242,6 +244,48 @@ class ExampleRobolectricTest {
         composeTestRule.waitForIdle()
         composeTestRule.onNodeWithTag("gmail_sign_in_button").assertIsDisplayed()
         composeTestRule.onNodeWithText("Sign in with Gmail").assertIsDisplayed()
+    }
+
+    @Test
+    fun `multi-track video selector prefers real HEVC or higher-quality stream over dummy stub track`() {
+        val tracks = listOf(
+            MediaTrackOption(
+                id = 0,
+                label = "Video 1 • 360p • H.264",
+                width = 640,
+                height = 360,
+                bitrate = 120_000,
+                codec = "H.264"
+            ),
+            MediaTrackOption(
+                id = 1,
+                label = "Video 2 • 480p • HEVC",
+                width = 854,
+                height = 480,
+                bitrate = 950_000,
+                codec = "HEVC"
+            ),
+            MediaTrackOption(
+                id = 2,
+                label = "Video 3 • 240p • VP9",
+                width = 426,
+                height = 240,
+                bitrate = 350_000,
+                codec = "VP9"
+            )
+        )
+
+        val chosenAuto = MediaTrackSelectionHelper.choosePreferredVideoTrackId(tracks, PlaybackQuality.AUTO)
+        assertEquals(1, chosenAuto)
+
+        val chosen240 = MediaTrackSelectionHelper.choosePreferredVideoTrackId(tracks, PlaybackQuality.SD_240)
+        assertEquals(2, chosen240)
+
+        val sameResStubVsReal = listOf(
+            MediaTrackOption(id = 0, label = "Video 1 • 360p • H.264", width = 640, height = 360, bitrate = 150_000, codec = "H.264"),
+            MediaTrackOption(id = 1, label = "Video 2 • 360p • HEVC", width = 640, height = 360, bitrate = 800_000, codec = "HEVC")
+        )
+        assertEquals(1, MediaTrackSelectionHelper.choosePreferredVideoTrackId(sameResStubVsReal, PlaybackQuality.SD_360))
     }
 
     @Test
