@@ -1,0 +1,6 @@
+{
+  "name": "BT Tube",
+  "description": "Premium red-and-white video streaming app with Home feed, Video Player, vertical Shorts, Search, Create studio, Subscriptions, and Profile.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
