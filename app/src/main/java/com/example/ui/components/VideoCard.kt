@@ -20,6 +20,7 @@ import androidx.compose.material.icons.outlined.NotificationsActive
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.Headphones
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Whatshot
 import androidx.compose.material3.Card
@@ -163,6 +164,7 @@ fun VideoFeedCard(
     onToggleSubscribe: () -> Unit,
     onShare: () -> Unit,
     onHideVideo: () -> Unit,
+    onPlayAsAudio: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
@@ -233,12 +235,26 @@ fun VideoFeedCard(
                             modifier = Modifier.size(13.dp)
                         )
                     }
+                    val qualitySuffix = if (video.qualityLabel.isNotBlank()) " • ${video.qualityLabel}" else ""
                     Text(
-                        text = " • ${FormatUtils.formatViews(video.viewsCount, video.isLive)} • ${video.uploadDate}",
+                        text = " • ${FormatUtils.formatViews(video.viewsCount, video.isLive)}$qualitySuffix • ${video.uploadDate}",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+
+            if (onPlayAsAudio != null && video.videoUri != null) {
+                IconButton(
+                    onClick = onPlayAsAudio,
+                    modifier = Modifier.testTag("play_audio_${video.id}")
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Headphones,
+                        contentDescription = "Play as audio",
+                        tint = MaterialTheme.colorScheme.primary
                     )
                 }
             }
@@ -259,6 +275,21 @@ fun VideoFeedCard(
                     expanded = menuExpanded,
                     onDismissRequest = { menuExpanded = false }
                 ) {
+                    if (onPlayAsAudio != null && video.videoUri != null) {
+                        DropdownMenuItem(
+                            text = { Text("Play as Audio (Background)") },
+                            leadingIcon = {
+                                Icon(
+                                    imageVector = Icons.Rounded.Headphones,
+                                    contentDescription = null
+                                )
+                            },
+                            onClick = {
+                                menuExpanded = false
+                                onPlayAsAudio()
+                            }
+                        )
+                    }
                     DropdownMenuItem(
                         text = {
                             Text(
@@ -376,8 +407,9 @@ fun CompactVideoRowCard(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
+            val qualitySuffix = if (video.qualityLabel.isNotBlank()) " • ${video.qualityLabel}" else ""
             Text(
-                text = "${FormatUtils.formatViews(video.viewsCount, video.isLive)} • ${video.uploadDate}",
+                text = "${FormatUtils.formatViews(video.viewsCount, video.isLive)}$qualitySuffix • ${video.uploadDate}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,

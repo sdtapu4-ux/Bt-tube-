@@ -1,0 +1,74 @@
+{
+  "entities": {
+    "UserAccount": {
+      "title": "UserAccount",
+      "description": "Authenticated Gmail user profile and BT Tube streaming preferences",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Firebase Auth UID matching the document ID"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "User display name from Google Sign-In"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "Verified Gmail / Google account email"
+        },
+        "photoUrl": {
+          "type": "string",
+          "description": "Optional Google profile photo URL"
+        },
+        "streamOnMobileData": {
+          "type": "boolean",
+          "description": "Allow video streaming over cellular mobile data"
+        },
+        "defaultQuality": {
+          "type": "string",
+          "enum": ["AUTO", "HD_1080", "HD_720", "SD_480", "SD_360", "SD_240", "SD_144"],
+          "description": "Preferred video playback quality including all SD tiers"
+        },
+        "autoplayNext": {
+          "type": "boolean",
+          "description": "Automatically play related video after completion"
+        },
+        "notificationsEnabled": {
+          "type": "boolean",
+          "description": "Enable creator upload notifications"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp set via FieldValue.serverTimestamp()"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp updated via FieldValue.serverTimestamp()"
+        }
+      },
+      "required": [
+        "userId",
+        "displayName",
+        "email",
+        "streamOnMobileData",
+        "defaultQuality",
+        "autoplayNext",
+        "notificationsEnabled",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": {
+        "$ref": "#/entities/UserAccount"
+      },
+      "description": "Owner-only Gmail account profile and BT Tube playback settings"
+    }
+  }
+}

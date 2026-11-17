@@ -97,9 +97,60 @@ fun ShortsScreen(
     onAddComment: (String, String) -> Unit,
     onToggleFollow: (String) -> Unit,
     onShareShort: (ShortItem) -> Unit,
+    onScanDeviceMedia: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    if (shorts.isEmpty()) return
+    if (shorts.isEmpty()) {
+        Box(
+            modifier = modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background)
+                .statusBarsPadding()
+                .testTag("shorts_empty_state"),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Surface(
+                    color = BtCrimson.copy(alpha = 0.14f),
+                    shape = CircleShape,
+                    modifier = Modifier.size(64.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Rounded.PlayArrow,
+                            contentDescription = null,
+                            tint = BtCrimson,
+                            modifier = Modifier.size(34.dp)
+                        )
+                    }
+                }
+                Text(
+                    text = "No Short Device Videos Yet",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "Short videos (under 60 seconds) from your phone appear here automatically.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Button(
+                    onClick = onScanDeviceMedia,
+                    shape = RoundedCornerShape(999.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = BtCrimson),
+                    modifier = Modifier.testTag("shorts_scan_button")
+                ) {
+                    Text("Load Phone Videos")
+                }
+            }
+        }
+        return
+    }
 
     val pagerState = rememberPagerState(pageCount = { shorts.size })
     var activeCommentShort by remember { mutableStateOf<ShortItem?>(null) }

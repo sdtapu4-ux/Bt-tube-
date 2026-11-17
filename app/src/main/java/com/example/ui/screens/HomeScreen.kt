@@ -23,6 +23,7 @@ import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.VideoLibrary
+import androidx.compose.material.icons.outlined.LibraryMusic
 import androidx.compose.material.icons.rounded.AddToQueue
 import androidx.compose.material.icons.rounded.CellTower
 import androidx.compose.material.icons.rounded.Refresh
@@ -81,6 +82,7 @@ fun HomeScreen(
     onImportMultipleVideos: () -> Unit,
     onImportVideoFolder: () -> Unit,
     onVideoClick: (VideoItem) -> Unit,
+    onPlayAsAudio: (VideoItem) -> Unit,
     onChannelClick: (String) -> Unit,
     onToggleWatchLater: (String) -> Unit,
     onToggleSubscribe: (String) -> Unit,
@@ -292,16 +294,16 @@ fun HomeScreen(
                                     ) {
                                         Column(modifier = Modifier.weight(1f)) {
                                             Text(
-                                                text = if (data.deviceVideosCount > 0) {
-                                                    "My Phone Videos (${data.deviceVideosCount} added)"
+                                                text = if (data.deviceVideosCount + data.deviceAudioCount > 0) {
+                                                    "Device Library (${data.deviceVideosCount} videos • ${data.deviceAudioCount} audio)"
                                                 } else {
-                                                    "Add Videos From Your Phone"
+                                                    "Your Device Videos & Audio"
                                                 },
                                                 style = MaterialTheme.typography.titleMedium,
                                                 color = MaterialTheme.colorScheme.onSurface
                                             )
                                             Text(
-                                                text = "Pick multiple videos or import an entire folder directly into BT Tube.",
+                                                text = "Only videos & audio songs on your phone appear here. Tap headphones on any video to play audio in background.",
                                                 style = MaterialTheme.typography.bodySmall,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
@@ -332,7 +334,7 @@ fun HomeScreen(
                                             modifier = Modifier.size(18.dp)
                                         )
                                         Spacer(modifier = Modifier.size(8.dp))
-                                        Text("Load All Phone Videos", maxLines = 1)
+                                        Text("Load All Phone Videos & Audio", maxLines = 1)
                                     }
 
                                     Row(
@@ -347,7 +349,7 @@ fun HomeScreen(
                                                 .weight(1f)
                                                 .testTag("import_select_videos_button")
                                         ) {
-                                            Text("Select Videos", maxLines = 1)
+                                            Text("Pick Files", maxLines = 1)
                                         }
 
                                         OutlinedButton(
@@ -371,7 +373,7 @@ fun HomeScreen(
                             }
                         }
 
-                        // Trending Video Section
+                        // Trending Video Section (shown only if items exist)
                         if (data.selectedCategory == VideoCategory.ALL && data.trendingVideos.isNotEmpty()) {
                             item(key = "trending_header") {
                                 Row(
@@ -420,7 +422,7 @@ fun HomeScreen(
                             }
                         }
 
-                        // Recommended Section Header
+                        // Device Media Feed Header
                         item(key = "recommended_header") {
                             Row(
                                 modifier = Modifier
@@ -430,16 +432,17 @@ fun HomeScreen(
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
                                 Text(
-                                    text = if (data.selectedCategory == VideoCategory.ALL) {
-                                        stringResource(R.string.recommended_for_you)
-                                    } else {
-                                        "${data.selectedCategory.label} Videos"
+                                    text = when (data.selectedCategory) {
+                                        VideoCategory.ALL -> "Device Videos & Audio"
+                                        VideoCategory.VIDEOS -> "Device Videos"
+                                        VideoCategory.AUDIO -> "Device Audio Songs"
+                                        VideoCategory.SHORTS -> "Short Device Videos"
                                     },
                                     style = MaterialTheme.typography.titleLarge,
                                     color = MaterialTheme.colorScheme.onBackground
                                 )
                                 Text(
-                                    text = "${data.recommendedVideos.size} videos",
+                                    text = "${data.recommendedVideos.size} items",
                                     style = MaterialTheme.typography.labelMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     fontWeight = FontWeight.Medium
@@ -450,13 +453,29 @@ fun HomeScreen(
                         if (data.recommendedVideos.isEmpty()) {
                             item(key = "empty_feed") {
                                 EmptyStateView(
-                                    icon = Icons.Outlined.VideoLibrary,
-                                    title = "No videos in ${data.selectedCategory.label}",
-                                    subtitle = "Try another category or restore hidden recommendations.",
-                                    actionLabel = "Show All Videos",
+                                    icon = Icons.Outlined.LibraryMusic,
+                                    title = if (data.deviceVideosCount + data.deviceAudioCount == 0) {
+                                        "No device media loaded yet"
+                                    } else {
+                                        "No items in ${data.selectedCategory.label}"
+                                    },
+                                    subtitle = if (data.deviceVideosCount + data.deviceAudioCount == 0) {
+                                        "Tap \"Load All Phone Videos & Audio\" above to bring in all videos and songs from your device."
+                                    } else {
+                                        "Switch back to All or pick another folder to load more files."
+                                    },
+                                    actionLabel = if (data.deviceVideosCount + data.deviceAudioCount == 0) {
+                                        "Load Device Media"
+                                    } else {
+                                        "Show All"
+                                    },
                                     onAction = {
-                                        onSelectCategory(VideoCategory.ALL)
-                                        onRestoreHidden()
+                                        if (data.deviceVideosCount + data.deviceAudioCount == 0) {
+                                            onScanAllMediaStoreVideos()
+                                        } else {
+                                            onSelectCategory(VideoCategory.ALL)
+                                            onRestoreHidden()
+                                        }
                                     }
                                 )
                             }
@@ -477,6 +496,7 @@ fun HomeScreen(
                                             isSavedWatchLater = video.id in data.watchLaterIds,
                                             isSubscribed = video.channelId in data.subscribedChannelIds,
                                             onVideoClick = { onVideoClick(video) },
+                                            onPlayAsAudio = { onPlayAsAudio(video) },
                                             onChannelClick = { onChannelClick(video.channelId) },
                                             onToggleWatchLater = { onToggleWatchLater(video.id) },
                                             onToggleSubscribe = { onToggleSubscribe(video.channelId) },

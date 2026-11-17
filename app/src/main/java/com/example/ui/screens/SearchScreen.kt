@@ -325,7 +325,7 @@ fun SearchScreen(
                         EmptyStateView(
                             icon = Icons.Outlined.Search,
                             title = "No results for \"${state.query}\"",
-                            subtitle = "Try searching for EV, Iceland, Synth, Gaming, or Space.",
+                            subtitle = "Try searching by video title, song name, artist, or quality (e.g., 480p SD).",
                             actionLabel = "Clear Search",
                             onAction = { onQueryChange("") }
                         )

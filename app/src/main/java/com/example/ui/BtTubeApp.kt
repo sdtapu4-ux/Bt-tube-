@@ -1,27 +1,36 @@
 package com.example.ui
 
+import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContentTransitionScope
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AccountCircle
 import androidx.compose.material.icons.outlined.AddCircleOutline
@@ -31,9 +40,15 @@ import androidx.compose.material.icons.outlined.Subscriptions
 import androidx.compose.material.icons.rounded.AccountCircle
 import androidx.compose.material.icons.rounded.AddCircle
 import androidx.compose.material.icons.rounded.Bolt
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Headphones
 import androidx.compose.material.icons.rounded.Home
+import androidx.compose.material.icons.rounded.Pause
+import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.Subscriptions
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -44,6 +59,7 @@ import androidx.compose.material3.NavigationRailItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -60,8 +76,10 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavType
@@ -71,6 +89,9 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.example.R
+import com.example.audio.BackgroundAudioController
+import com.example.audio.BackgroundAudioState
+import com.example.audio.BackgroundAudioTrack
 import com.example.data.MediaPermissionHelper
 import com.example.model.ShortItem
 import com.example.model.VideoItem
@@ -86,7 +107,6 @@ import com.example.ui.screens.VideoPlayerScreen
 import com.example.ui.theme.BtCrimson
 import com.example.ui.theme.BtWhite
 import com.example.ui.viewmodel.BtTubeViewModel
-import com.example.util.NetworkConnectionState
 import com.example.util.NetworkConnectivityHelper
 import kotlinx.coroutines.launch
 
@@ -97,9 +117,10 @@ object BtRoutes {
     const val SUBSCRIPTIONS = "subscriptions"
     const val PROFILE = "profile"
     const val SEARCH = "search"
-    const val PLAYER = "player/{videoId}"
+    const val PLAYER = "player/{videoId}?audioMode={audioMode}"
 
-    fun playerRoute(videoId: String): String = "player/$videoId"
+    fun playerRoute(videoId: String, audioMode: Boolean = false): String =
+        "player/$videoId?audioMode=$audioMode"
 }
 
 private data class BottomNavTab(
@@ -147,6 +168,8 @@ private val bottomTabs = listOf(
 @Composable
 fun BtTubeApp(
     viewModel: BtTubeViewModel,
+    onGoogleSignIn: () -> Unit = {},
+    onSignOut: () -> Unit = { viewModel.signOut() },
     modifier: Modifier = Modifier
 ) {
     val navController = rememberNavController()
@@ -165,6 +188,7 @@ fun BtTubeApp(
     val notifications by viewModel.notifications.collectAsStateWithLifecycle()
     val isImportingVideos by viewModel.isImportingVideos.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
+    val backgroundAudioState by BackgroundAudioController.state.collectAsStateWithLifecycle()
 
     val channelsById = remember(channels) { channels.associateBy { it.id } }
 
@@ -186,13 +210,13 @@ fun BtTubeApp(
         }
     }
 
-    val multiVideoPickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.PickMultipleVisualMedia(maxItems = 100)
+    val multiMediaPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenMultipleDocuments()
     ) { uris ->
         if (uris.isNotEmpty()) {
             viewModel.importPhoneVideos(context, uris) { count ->
-                if (count > 0) showMessage("Added $count videos from your phone")
-                else showMessage("Selected videos are already in BT Tube")
+                if (count > 0) showMessage("Added $count videos & audio files from your phone")
+                else showMessage("Selected media is already in BT Tube")
             }
         }
     }
@@ -202,51 +226,82 @@ fun BtTubeApp(
     ) { treeUri ->
         if (treeUri != null) {
             viewModel.importPhoneFolder(context, treeUri) { count ->
-                if (count > 0) showMessage("Imported $count videos from folder")
-                else showMessage("No new videos found in selected folder")
+                if (count > 0) showMessage("Imported $count videos & audio files from folder")
+                else showMessage("No new videos or audio found in selected folder")
             }
         }
     }
 
-    val videoPermissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        if (granted) {
+    val mediaPermissionsLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { grants ->
+        if (grants.values.any { it } || MediaPermissionHelper.hasAnyMediaPermission(context)) {
             viewModel.scanAllMediaStoreVideos(context) { count ->
-                if (count > 0) showMessage("Added $count videos from your phone")
-                else showMessage("All phone videos are already loaded")
+                if (count > 0) showMessage("Loaded $count videos & audio tracks from your phone")
+                else showMessage("All device videos & audio are already loaded")
             }
         } else {
-            showMessage("Permission denied. You can still use Select Videos or Add Folder.")
+            showMessage("Permission denied. You can still use Pick Files or Add Folder.")
         }
     }
 
-    // Automatically load MediaStore videos if permission is already granted
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { _ -> }
+
+    // Automatically load MediaStore videos & audio if permission is already granted
     LaunchedEffect(Unit) {
-        if (MediaPermissionHelper.hasVideoStoragePermission(context)) {
+        if (MediaPermissionHelper.hasAnyMediaPermission(context)) {
             viewModel.scanAllMediaStoreVideos(context) { }
         }
     }
 
     val launchMediaStoreScan: () -> Unit = {
-        if (MediaPermissionHelper.hasVideoStoragePermission(context)) {
+        if (MediaPermissionHelper.hasAllMediaPermissions(context)) {
             viewModel.scanAllMediaStoreVideos(context) { count ->
-                if (count > 0) showMessage("Added $count videos from your phone")
-                else showMessage("All phone videos are already in BT Tube")
+                if (count > 0) showMessage("Loaded $count videos & audio tracks from your phone")
+                else showMessage("All device videos & audio are already loaded")
             }
         } else {
-            videoPermissionLauncher.launch(MediaPermissionHelper.requiredVideoPermission())
+            mediaPermissionsLauncher.launch(MediaPermissionHelper.requiredMediaPermissions())
         }
     }
 
     val launchMultiVideoImport: () -> Unit = {
-        multiVideoPickerLauncher.launch(
-            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)
-        )
+        multiMediaPickerLauncher.launch(arrayOf("video/*", "audio/*"))
     }
 
     val launchFolderImport: () -> Unit = {
         folderPickerLauncher.launch(null)
+    }
+
+    val startBackgroundAudioForVideo: (VideoItem, Float, Float) -> Unit = { video, startSec, speed ->
+        val uri = video.videoUri
+        if (uri != null) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+            ) {
+                runCatching {
+                    notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                }
+            }
+            val queue = viewModel.buildAudioQueue(video)
+            val track = queue.firstOrNull { it.id == video.id } ?: BackgroundAudioTrack(
+                id = video.id,
+                title = video.title,
+                subtitle = channelsById[video.channelId]?.name ?: "Device Media",
+                uriString = uri,
+                isVideoSource = !video.isAudioOnly,
+                durationSeconds = video.durationSeconds.coerceAtLeast(1)
+            )
+            BackgroundAudioController.playTrackAsAudio(
+                context = context,
+                track = track,
+                queue = queue,
+                startPositionSeconds = startSec,
+                playbackSpeed = speed
+            )
+        }
     }
 
     val topLevelRoutes = remember { bottomTabs.map { it.route }.toSet() }
@@ -254,7 +309,13 @@ fun BtTubeApp(
 
     val navigateToPlayer: (VideoItem) -> Unit = { video ->
         viewModel.openVideo(video.id)
-        navController.navigate(BtRoutes.playerRoute(video.id))
+        navController.navigate(BtRoutes.playerRoute(video.id, audioMode = video.isAudioOnly))
+    }
+
+    val navigateToAudioPlayer: (VideoItem) -> Unit = { video ->
+        startBackgroundAudioForVideo(video, 0f, 1.0f)
+        viewModel.openVideo(video.id)
+        navController.navigate(BtRoutes.playerRoute(video.id, audioMode = true))
     }
 
     val navigateToTab: (String) -> Unit = { route ->
@@ -315,61 +376,97 @@ fun BtTubeApp(
                 contentWindowInsets = WindowInsets(0, 0, 0, 0),
                 snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
                 bottomBar = {
-                    if (showTopLevelNav && !useNavRail) {
-                        NavigationBar(
-                            containerColor = MaterialTheme.colorScheme.surface,
-                            tonalElevation = 3.dp,
-                            modifier = Modifier.windowInsetsPadding(WindowInsets.navigationBars)
+                    val showMiniAudio = backgroundAudioState.currentTrack != null &&
+                        currentRoute != BtRoutes.PLAYER
+                    val showNavBar = showTopLevelNav && !useNavRail
+                    if (showMiniAudio || showNavBar) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .then(
+                                    if (!showNavBar) {
+                                        Modifier.windowInsetsPadding(WindowInsets.navigationBars)
+                                    } else {
+                                        Modifier
+                                    }
+                                )
                         ) {
-                            bottomTabs.forEach { tab ->
-                                val selected = currentRoute == tab.route
-                                val label = stringResource(tab.labelResId)
-                                NavigationBarItem(
-                                    selected = selected,
-                                    onClick = { navigateToTab(tab.route) },
-                                    icon = {
-                                        if (tab.isCreate) {
-                                            Box(
-                                                modifier = Modifier
-                                                    .size(34.dp)
-                                                    .clip(CircleShape)
-                                                    .background(
-                                                        if (selected) BtCrimson
-                                                        else MaterialTheme.colorScheme.primaryContainer
-                                                    ),
-                                                contentAlignment = Alignment.Center
-                                            ) {
-                                                Icon(
-                                                    imageVector = if (selected) tab.selectedIcon else tab.unselectedIcon,
-                                                    contentDescription = label,
-                                                    tint = if (selected) BtWhite else BtCrimson,
-                                                    modifier = Modifier.size(22.dp)
-                                                )
-                                            }
-                                        } else {
-                                            Icon(
-                                                imageVector = if (selected) tab.selectedIcon else tab.unselectedIcon,
-                                                contentDescription = label
+                            if (showMiniAudio) {
+                                MiniAudioPlayerBar(
+                                    state = backgroundAudioState,
+                                    onOpenPlayer = {
+                                        val trackId = backgroundAudioState.currentTrack?.id
+                                        if (trackId != null) {
+                                            viewModel.openVideo(trackId)
+                                            navController.navigate(
+                                                BtRoutes.playerRoute(trackId, audioMode = true)
                                             )
                                         }
                                     },
-                                    label = {
-                                        Text(
-                                            text = label,
-                                            style = MaterialTheme.typography.labelSmall,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
+                                    onTogglePlayPause = {
+                                        BackgroundAudioController.togglePlayPause(context)
                                     },
-                                    colors = NavigationBarItemDefaults.colors(
-                                        selectedIconColor = MaterialTheme.colorScheme.primary,
-                                        selectedTextColor = MaterialTheme.colorScheme.primary,
-                                        indicatorColor = MaterialTheme.colorScheme.primaryContainer,
-                                        unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
-                                    ),
-                                    modifier = Modifier.testTag("nav_${tab.route}")
+                                    onNext = { BackgroundAudioController.playNext(context) },
+                                    onClose = { BackgroundAudioController.stop(context) }
                                 )
+                            }
+                            if (showNavBar) {
+                                NavigationBar(
+                                    containerColor = MaterialTheme.colorScheme.surface,
+                                    tonalElevation = 3.dp,
+                                    modifier = Modifier.windowInsetsPadding(WindowInsets.navigationBars)
+                                ) {
+                                    bottomTabs.forEach { tab ->
+                                        val selected = currentRoute == tab.route
+                                        val label = stringResource(tab.labelResId)
+                                        NavigationBarItem(
+                                            selected = selected,
+                                            onClick = { navigateToTab(tab.route) },
+                                            icon = {
+                                                if (tab.isCreate) {
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .size(34.dp)
+                                                            .clip(CircleShape)
+                                                            .background(
+                                                                if (selected) BtCrimson
+                                                                else MaterialTheme.colorScheme.primaryContainer
+                                                            ),
+                                                        contentAlignment = Alignment.Center
+                                                    ) {
+                                                        Icon(
+                                                            imageVector = if (selected) tab.selectedIcon else tab.unselectedIcon,
+                                                            contentDescription = label,
+                                                            tint = if (selected) BtWhite else BtCrimson,
+                                                            modifier = Modifier.size(22.dp)
+                                                        )
+                                                    }
+                                                } else {
+                                                    Icon(
+                                                        imageVector = if (selected) tab.selectedIcon else tab.unselectedIcon,
+                                                        contentDescription = label
+                                                    )
+                                                }
+                                            },
+                                            label = {
+                                                Text(
+                                                    text = label,
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            },
+                                            colors = NavigationBarItemDefaults.colors(
+                                                selectedIconColor = MaterialTheme.colorScheme.primary,
+                                                selectedTextColor = MaterialTheme.colorScheme.primary,
+                                                indicatorColor = MaterialTheme.colorScheme.primaryContainer,
+                                                unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
+                                            ),
+                                            modifier = Modifier.testTag("nav_${tab.route}")
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -403,6 +500,7 @@ fun BtTubeApp(
                             onImportMultipleVideos = launchMultiVideoImport,
                             onImportVideoFolder = launchFolderImport,
                             onVideoClick = navigateToPlayer,
+                            onPlayAsAudio = navigateToAudioPlayer,
                             onChannelClick = { channelId ->
                                 viewModel.selectSubscriptionChannel(channelId)
                                 navigateToTab(BtRoutes.SUBSCRIPTIONS)
@@ -436,7 +534,8 @@ fun BtTubeApp(
                             onToggleFollow = viewModel::toggleSubscription,
                             onShareShort = { short ->
                                 shareShort(context, short)
-                            }
+                            },
+                            onScanDeviceMedia = launchMediaStoreScan
                         )
                     }
 
@@ -488,12 +587,9 @@ fun BtTubeApp(
                         ProfileScreen(
                             state = profileState,
                             networkState = networkState,
-                            onSignIn = { email, displayName ->
-                                viewModel.signIn(email, displayName)
-                                showMessage("Signed in to BT Tube")
-                            },
+                            onGoogleSignIn = onGoogleSignIn,
                             onSignOut = {
-                                viewModel.signOut()
+                                onSignOut()
                                 showMessage("Signed out")
                             },
                             onVideoClick = navigateToPlayer,
@@ -546,7 +642,13 @@ fun BtTubeApp(
 
                     composable(
                         route = BtRoutes.PLAYER,
-                        arguments = listOf(navArgument("videoId") { type = NavType.StringType }),
+                        arguments = listOf(
+                            navArgument("videoId") { type = NavType.StringType },
+                            navArgument("audioMode") {
+                                type = NavType.BoolType
+                                defaultValue = false
+                            }
+                        ),
                         enterTransition = {
                             slideIntoContainer(
                                 AnimatedContentTransitionScope.SlideDirection.Up,
@@ -559,9 +661,12 @@ fun BtTubeApp(
                                 tween(220)
                             )
                         }
-                    ) {
+                    ) { entry ->
+                        val initialAudio = entry.arguments?.getBoolean("audioMode") ?: false
                         VideoPlayerScreen(
                             state = playerState,
+                            backgroundAudioState = backgroundAudioState,
+                            initialAudioMode = initialAudio,
                             onBack = {
                                 viewModel.setFullscreen(false)
                                 navController.popBackStack()
@@ -572,8 +677,16 @@ fun BtTubeApp(
                             onSyncPosition = viewModel::syncPlaybackPosition,
                             onAdvancePlayback = viewModel::advancePlayback,
                             onSelectSpeed = viewModel::setPlaybackSpeed,
+                            onSelectQuality = viewModel::updateDefaultQuality,
                             onToggleFullscreen = viewModel::toggleFullscreen,
                             onExitFullscreen = { viewModel.setFullscreen(false) },
+                            onStartBackgroundAudio = startBackgroundAudioForVideo,
+                            onStopBackgroundAudio = { BackgroundAudioController.stop(context) },
+                            onToggleBackgroundPlayPause = { BackgroundAudioController.togglePlayPause(context) },
+                            onSeekBackgroundAudio = { sec -> BackgroundAudioController.seekTo(context, sec) },
+                            onSetBackgroundSpeed = { speed -> BackgroundAudioController.setPlaybackSpeed(context, speed) },
+                            onBackgroundNext = { BackgroundAudioController.playNext(context) },
+                            onBackgroundPrevious = { BackgroundAudioController.playPrevious(context) },
                             onToggleSubscribe = viewModel::toggleSubscription,
                             onToggleLike = viewModel::toggleVideoLike,
                             onToggleDislike = viewModel::toggleVideoDislike,
@@ -608,6 +721,95 @@ fun BtTubeApp(
             },
             onMarkAllRead = viewModel::markAllNotificationsRead
         )
+    }
+}
+
+@Composable
+private fun MiniAudioPlayerBar(
+    state: BackgroundAudioState,
+    onOpenPlayer: () -> Unit,
+    onTogglePlayPause: () -> Unit,
+    onNext: () -> Unit,
+    onClose: () -> Unit
+) {
+    val track = state.currentTrack ?: return
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        tonalElevation = 6.dp,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onOpenPlayer)
+            .testTag("mini_audio_player_bar")
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(38.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(BtCrimson),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Headphones,
+                    contentDescription = null,
+                    tint = BtWhite,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = track.title,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = if (track.isVideoSource) "Video playing as audio • Background" else "Device audio • Background",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            IconButton(
+                onClick = onTogglePlayPause,
+                modifier = Modifier.testTag("mini_player_play_pause")
+            ) {
+                Icon(
+                    imageVector = if (state.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                    contentDescription = if (state.isPlaying) "Pause audio" else "Play audio",
+                    tint = MaterialTheme.colorScheme.onSurface
+                )
+            }
+            IconButton(
+                onClick = onNext,
+                modifier = Modifier.testTag("mini_player_next")
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.SkipNext,
+                    contentDescription = "Next track",
+                    tint = MaterialTheme.colorScheme.onSurface
+                )
+            }
+            IconButton(
+                onClick = onClose,
+                modifier = Modifier.testTag("mini_player_close")
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Close,
+                    contentDescription = "Stop background audio",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
     }
 }
 

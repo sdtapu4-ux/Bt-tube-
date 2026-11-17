@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.PlayCircleFilled
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -265,6 +266,72 @@ fun VideoThumbnailSurface(
                                 .size(48.dp)
                         )
                     }
+                }
+            }
+            is ThumbnailArtwork.AudioTrackArt -> {
+                val context = LocalContext.current
+                val albumBitmap by produceState<ImageBitmap?>(initialValue = null, key1 = artwork.albumArtUri) {
+                    value = LocalVideoScanner.loadAlbumArtBitmap(context, artwork.albumArtUri)
+                        ?.asImageBitmap()
+                }
+                if (albumBitmap != null) {
+                    Image(
+                        bitmap = albumBitmap!!,
+                        contentDescription = contentDescription,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop
+                    )
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(
+                                Brush.linearGradient(
+                                    colors = listOf(Color(0xFF28060B), Color(0xFF991B1B), Color(0xFF18181F))
+                                )
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(54.dp)
+                                    .clip(CircleShape)
+                                    .background(BtWhite.copy(alpha = 0.16f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.MusicNote,
+                                    contentDescription = null,
+                                    tint = BtWhite,
+                                    modifier = Modifier.size(30.dp)
+                                )
+                            }
+                            Text(
+                                text = artwork.artist.ifBlank { "Device Audio" },
+                                style = MaterialTheme.typography.labelLarge,
+                                color = BtWhite.copy(alpha = 0.9f)
+                            )
+                        }
+                    }
+                }
+                Surface(
+                    color = BtCrimson.copy(alpha = 0.9f),
+                    shape = RoundedCornerShape(6.dp),
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(10.dp)
+                ) {
+                    Text(
+                        text = "AUDIO",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = BtWhite,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                    )
                 }
             }
         }

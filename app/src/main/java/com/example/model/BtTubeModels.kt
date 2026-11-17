@@ -4,13 +4,9 @@ import androidx.annotation.DrawableRes
 
 enum class VideoCategory(val label: String) {
     ALL("All"),
-    TECH("Tech"),
-    MUSIC("Music"),
-    GAMING("Gaming"),
-    NATURE("Nature"),
-    DESIGN("Design"),
-    SCIENCE("Science"),
-    PODCASTS("Podcasts")
+    VIDEOS("Videos"),
+    AUDIO("Audio"),
+    SHORTS("Shorts")
 }
 
 enum class ThemeMode(val label: String) {
@@ -19,11 +15,18 @@ enum class ThemeMode(val label: String) {
     DARK("Dark")
 }
 
-enum class PlaybackQuality(val label: String) {
-    AUTO("Auto"),
-    HD_1080("1080p HD"),
-    HD_720("720p"),
-    SD_480("480p")
+enum class PlaybackQuality(
+    val label: String,
+    val shortLabel: String,
+    val isSd: Boolean = false
+) {
+    AUTO("Auto (Adaptive)", "Auto"),
+    HD_1080("1080p Full HD", "1080p"),
+    HD_720("720p HD", "720p"),
+    SD_480("480p SD", "480p SD", isSd = true),
+    SD_360("360p SD", "360p SD", isSd = true),
+    SD_240("240p SD", "240p SD", isSd = true),
+    SD_144("144p SD", "144p SD", isSd = true)
 }
 
 enum class SearchFilter(val label: String) {
@@ -45,6 +48,7 @@ sealed interface ThumbnailArtwork {
     data class PhotoDrawable(@param:DrawableRes val resId: Int) : ThumbnailArtwork
     data class VectorScene(val style: StudioSceneStyle, val badgeText: String) : ThumbnailArtwork
     data class LocalVideoFrame(val uriString: String) : ThumbnailArtwork
+    data class AudioTrackArt(val albumArtUri: String?, val artist: String) : ThumbnailArtwork
 }
 
 data class Channel(
@@ -88,7 +92,9 @@ data class VideoItem(
     val tags: List<String> = emptyList(),
     val comments: List<VideoComment> = emptyList(),
     val isUserCreated: Boolean = false,
-    val videoUri: String? = null
+    val videoUri: String? = null,
+    val isAudioOnly: Boolean = false,
+    val qualityLabel: String = ""
 )
 
 data class ShortItem(
@@ -119,11 +125,13 @@ data class NotificationItem(
 
 data class UserProfile(
     val isSignedIn: Boolean = false,
+    val userId: String = "",
     val name: String = "Guest Viewer",
     val handle: String = "@guest_bt",
     val email: String = "",
+    val photoUrl: String? = null,
     val avatarInitials: String = "BT",
-    val bio: String = "Sign in to sync your watch history, liked videos, and creator studio."
+    val bio: String = "Sign in with Gmail to sync your preferences across devices."
 )
 
 data class AppSettings(

@@ -4,8 +4,11 @@ import android.content.Context
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import android.util.Log
+import com.example.audio.BackgroundAudioTrack
 import com.example.data.BtTubeRepository
 import com.example.data.LocalVideoScanner
+import com.example.data.UserAccountFirestoreRepository
 import com.example.model.AppSettings
 import com.example.model.Channel
 import com.example.model.NotificationItem
@@ -18,11 +21,15 @@ import com.example.model.UiState
 import com.example.model.UserProfile
 import com.example.model.VideoCategory
 import com.example.model.VideoItem
+import com.google.firebase.auth.FirebaseUser
+import com.google.firebase.firestore.FirebaseFirestoreException
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -36,7 +43,8 @@ data class HomeFeedData(
     val subscribedChannelIds: Set<String> = emptySet(),
     val watchLaterIds: Set<String> = emptySet(),
     val unreadNotificationsCount: Int = 0,
-    val deviceVideosCount: Int = 0
+    val deviceVideosCount: Int = 0,
+    val deviceAudioCount: Int = 0
 )
 
 data class PlayerUiState(
@@ -91,8 +99,42 @@ data class ProfileUiState(
 )
 
 class BtTubeViewModel(
-    private val repository: BtTubeRepository = BtTubeRepository()
+    private val repository: BtTubeRepository = BtTubeRepository(),
+    private val accountRepository: UserAccountFirestoreRepository? = null,
+    private val authenticatedUser: FirebaseUser? = null
 ) : ViewModel() {
+
+    init {
+        val user = authenticatedUser
+        if (user != null) {
+            repository.applyGmailUser(
+                uid = user.uid,
+                email = user.email,
+                displayName = user.displayName,
+                photoUrl = user.photoUrl?.toString()
+            )
+            if (accountRepository != null) {
+                viewModelScope.launch {
+                    accountRepository.syncSignedInUser(user, repository.settings.value)
+                }
+                viewModelScope.launch {
+                    accountRepository.observeUserAccount(user.uid)
+                        .catch { error ->
+                            val firestoreError = generateSequence(error) { it.cause }
+                                .filterIsInstance<FirebaseFirestoreException>()
+                                .firstOrNull()
+                            if (firestoreError == null && error is CancellationException) throw error
+                            Log.w("BtTubeViewModel", "Error observing Gmail account settings", firestoreError ?: error)
+                        }
+                        .collect { remoteAccount ->
+                            if (remoteAccount != null) {
+                                repository.applyRemoteAccount(remoteAccount)
+                            }
+                        }
+                }
+            }
+        }
+    }
 
     private val _selectedCategory = MutableStateFlow(VideoCategory.ALL)
     private val _isHomeLoading = MutableStateFlow(false)
@@ -156,24 +198,23 @@ class BtTubeViewModel(
             errorMsg != null -> UiState.Error(errorMsg)
             else -> {
                 val visibleVideos = videos.filterNot { it.id in hiddenIds }
-                val filteredByCategory = if (category == VideoCategory.ALL) {
-                    visibleVideos
-                } else {
-                    visibleVideos.filter { it.category == category }
+                val filteredByCategory = when (category) {
+                    VideoCategory.ALL -> visibleVideos
+                    VideoCategory.VIDEOS -> visibleVideos.filter { !it.isAudioOnly }
+                    VideoCategory.AUDIO -> visibleVideos.filter { it.isAudioOnly }
+                    VideoCategory.SHORTS -> visibleVideos.filter { !it.isAudioOnly && it.durationSeconds <= 60 }
                 }
-                val trending = visibleVideos
-                    .filter { it.isTrending }
-                    .sortedBy { it.trendingRank ?: Int.MAX_VALUE }
                 UiState.Success(
                     HomeFeedData(
                         selectedCategory = category,
-                        trendingVideos = trending,
+                        trendingVideos = emptyList(),
                         recommendedVideos = filteredByCategory,
                         channelsById = channelList.associateBy { it.id },
                         subscribedChannelIds = subIds,
                         watchLaterIds = watchLater,
                         unreadNotificationsCount = notifs.count { !it.isRead },
-                        deviceVideosCount = visibleVideos.count { it.videoUri != null }
+                        deviceVideosCount = visibleVideos.count { it.videoUri != null && !it.isAudioOnly },
+                        deviceAudioCount = visibleVideos.count { it.videoUri != null && it.isAudioOnly }
                     )
                 )
             }
@@ -279,7 +320,7 @@ class BtTubeViewModel(
         val trimmed = query.trim()
 
         val suggestions = if (trimmed.isEmpty()) {
-            listOf("Hyper-EV 4K", "Iceland Canyon", "Analog Synths", "Path Tracing", "Motion Systems", "Orbital Live")
+            allVideos.map { it.title }.distinct().take(6)
         } else {
             buildSet {
                 allVideos.forEach { video ->
@@ -591,18 +632,31 @@ class BtTubeViewModel(
 
     fun toggleAutoplayNext() {
         repository.toggleAutoplayNext()
+        syncPreferencesToCloud()
     }
 
     fun toggleNotificationsEnabled() {
         repository.toggleNotificationsEnabled()
+        syncPreferencesToCloud()
     }
 
     fun toggleStreamOnMobileData() {
         repository.toggleStreamOnMobileData()
+        syncPreferencesToCloud()
     }
 
     fun updateDefaultQuality(quality: PlaybackQuality) {
         repository.updateDefaultQuality(quality)
+        syncPreferencesToCloud()
+    }
+
+    private fun syncPreferencesToCloud() {
+        val repo = accountRepository ?: return
+        if (authenticatedUser == null) return
+        val currentSettings = repository.settings.value
+        viewModelScope.launch {
+            repo.updatePreferences(currentSettings)
+        }
     }
 
     fun publishCreatorContent(
@@ -658,10 +712,27 @@ class BtTubeViewModel(
     ) {
         viewModelScope.launch {
             _isImportingVideos.value = true
-            val discovered = LocalVideoScanner.scanAllMediaStoreVideos(context)
+            val discovered = LocalVideoScanner.scanAllDeviceMedia(context)
             val addedCount = repository.importDeviceVideos(discovered)
             _isImportingVideos.value = false
             onComplete(addedCount)
+        }
+    }
+
+    fun buildAudioQueue(startingVideo: VideoItem): List<BackgroundAudioTrack> {
+        val allPlayable = repository.videos.value.filter { it.videoUri != null }
+        val channelMap = _channelsMap.value
+        val ordered = listOf(startingVideo) + allPlayable.filter { it.id != startingVideo.id }
+        return ordered.mapNotNull { item ->
+            val uri = item.videoUri ?: return@mapNotNull null
+            BackgroundAudioTrack(
+                id = item.id,
+                title = item.title,
+                subtitle = channelMap[item.channelId]?.name ?: if (item.isAudioOnly) "Device Audio" else "Device Video",
+                uriString = uri,
+                isVideoSource = !item.isAudioOnly,
+                durationSeconds = item.durationSeconds.coerceAtLeast(1)
+            )
         }
     }
 

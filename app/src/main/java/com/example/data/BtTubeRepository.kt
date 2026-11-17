@@ -20,42 +20,40 @@ import java.util.UUID
 
 class BtTubeRepository {
 
-    private val _channels = MutableStateFlow(SampleCatalog.channels)
+    private val _channels = MutableStateFlow<List<Channel>>(emptyList())
     val channels: StateFlow<List<Channel>> = _channels.asStateFlow()
 
-    private val _videos = MutableStateFlow(SampleCatalog.videos)
+    private val _videos = MutableStateFlow<List<VideoItem>>(emptyList())
     val videos: StateFlow<List<VideoItem>> = _videos.asStateFlow()
 
-    private val _shorts = MutableStateFlow(SampleCatalog.shorts)
+    private val _shorts = MutableStateFlow<List<ShortItem>>(emptyList())
     val shorts: StateFlow<List<ShortItem>> = _shorts.asStateFlow()
 
-    private val _subscribedChannelIds = MutableStateFlow(
-        setOf("ch_apex_drive", "ch_nordic_lens", "ch_pulse_synth", "ch_cosmos_brief")
-    )
+    private val _subscribedChannelIds = MutableStateFlow<Set<String>>(emptySet())
     val subscribedChannelIds: StateFlow<Set<String>> = _subscribedChannelIds.asStateFlow()
 
-    private val _likedVideoIds = MutableStateFlow(setOf("vid_2"))
+    private val _likedVideoIds = MutableStateFlow<Set<String>>(emptySet())
     val likedVideoIds: StateFlow<Set<String>> = _likedVideoIds.asStateFlow()
 
-    private val _dislikedVideoIds = MutableStateFlow(emptySet<String>())
+    private val _dislikedVideoIds = MutableStateFlow<Set<String>>(emptySet())
     val dislikedVideoIds: StateFlow<Set<String>> = _dislikedVideoIds.asStateFlow()
 
-    private val _watchLaterIds = MutableStateFlow(setOf("vid_4", "vid_5"))
+    private val _watchLaterIds = MutableStateFlow<Set<String>>(emptySet())
     val watchLaterIds: StateFlow<Set<String>> = _watchLaterIds.asStateFlow()
 
-    private val _hiddenVideoIds = MutableStateFlow(emptySet<String>())
+    private val _hiddenVideoIds = MutableStateFlow<Set<String>>(emptySet())
     val hiddenVideoIds: StateFlow<Set<String>> = _hiddenVideoIds.asStateFlow()
 
-    private val _watchHistoryIds = MutableStateFlow(listOf("vid_1", "vid_3"))
+    private val _watchHistoryIds = MutableStateFlow<List<String>>(emptyList())
     val watchHistoryIds: StateFlow<List<String>> = _watchHistoryIds.asStateFlow()
 
-    private val _likedShortIds = MutableStateFlow(setOf("short_2"))
+    private val _likedShortIds = MutableStateFlow<Set<String>>(emptySet())
     val likedShortIds: StateFlow<Set<String>> = _likedShortIds.asStateFlow()
 
-    private val _recentSearches = MutableStateFlow(SampleCatalog.initialRecentSearches)
+    private val _recentSearches = MutableStateFlow<List<String>>(emptyList())
     val recentSearches: StateFlow<List<String>> = _recentSearches.asStateFlow()
 
-    private val _notifications = MutableStateFlow(SampleCatalog.initialNotifications)
+    private val _notifications = MutableStateFlow<List<NotificationItem>>(emptyList())
     val notifications: StateFlow<List<NotificationItem>> = _notifications.asStateFlow()
 
     private val _userProfile = MutableStateFlow(UserProfile())
@@ -70,12 +68,12 @@ class BtTubeRepository {
                 id = "ch_user",
                 name = _userProfile.value.name,
                 handle = _userProfile.value.handle,
-                baseSubscriberCount = 128,
+                baseSubscriberCount = 1,
                 isVerified = false,
                 avatarColorHex = 0xFFD91424,
                 initials = _userProfile.value.avatarInitials,
-                category = VideoCategory.TECH,
-                tagline = "BT Tube Creator"
+                category = VideoCategory.VIDEOS,
+                tagline = "Device Media"
             )
     }
 
@@ -210,8 +208,13 @@ class BtTubeRepository {
         _notifications.update { list -> list.map { it.copy(isRead = true) } }
     }
 
-    fun signIn(email: String, displayName: String? = null) {
-        val cleanEmail = email.trim().ifEmpty { "creator@bttube.app" }
+    fun applyGmailUser(
+        uid: String,
+        email: String?,
+        displayName: String?,
+        photoUrl: String?
+    ) {
+        val cleanEmail = (email?.trim()?.takeIf { it.isNotEmpty() } ?: "gmail_user@gmail.com")
         val resolvedName = displayName?.trim()?.takeIf { it.isNotEmpty() }
             ?: cleanEmail.substringBefore("@").replaceFirstChar { it.uppercase() }
         val initials = resolvedName.split(" ")
@@ -220,14 +223,45 @@ class BtTubeRepository {
             .joinToString("") { it.first().uppercase() }
             .ifEmpty { "BT" }
         val handle = "@" + resolvedName.lowercase().replace(Regex("[^a-z0-9]"), "")
-            .ifEmpty { "btcreator" }
+            .ifEmpty { "btmember" }
         _userProfile.value = UserProfile(
             isSignedIn = true,
+            userId = uid,
             name = resolvedName,
             handle = handle,
             email = cleanEmail,
+            photoUrl = photoUrl,
             avatarInitials = initials,
-            bio = "BT Tube member • Streaming in crisp HD"
+            bio = "Signed in with Gmail ($cleanEmail) • Cloud settings synced"
+        )
+    }
+
+    fun applyRemoteAccount(account: FirestoreUserAccount) {
+        val resolvedQuality = enumValues<PlaybackQuality>()
+            .firstOrNull { it.name == account.defaultQuality }
+            ?: _settings.value.defaultQuality
+        _settings.update {
+            it.copy(
+                streamOnMobileData = account.streamOnMobileData,
+                defaultQuality = resolvedQuality,
+                autoplayNext = account.autoplayNext,
+                notificationsEnabled = account.notificationsEnabled
+            )
+        }
+        applyGmailUser(
+            uid = account.userId,
+            email = account.email,
+            displayName = account.displayName,
+            photoUrl = account.photoUrl
+        )
+    }
+
+    fun signIn(email: String, displayName: String? = null) {
+        applyGmailUser(
+            uid = "local_user",
+            email = email,
+            displayName = displayName,
+            photoUrl = null
         )
     }
 
@@ -305,7 +339,8 @@ class BtTubeRepository {
                 artwork = artwork,
                 tags = listOf(category.label, "CreatorStudio", "BTTube"),
                 isUserCreated = true,
-                videoUri = videoUri
+                videoUri = videoUri,
+                isAudioOnly = (category == VideoCategory.AUDIO)
             )
             _videos.update { listOf(newVideo) + it }
             newId
@@ -318,38 +353,73 @@ class BtTubeRepository {
         val fresh = imported.filter { it.uriString !in existingUris }
         if (fresh.isEmpty()) return 0
 
-        val deviceChannelId = ensureDeviceChannel()
-        val newVideos = fresh.map { item ->
+        val hasVideos = fresh.any { it.mediaType == DeviceMediaType.VIDEO }
+        val hasAudio = fresh.any { it.mediaType == DeviceMediaType.AUDIO }
+        val deviceVideoChannelId = if (hasVideos) ensureDeviceChannel() else "ch_device_videos"
+        val deviceAudioChannelId = if (hasAudio) ensureDeviceAudioChannel() else "ch_device_audio"
+
+        val newItems = fresh.map { item ->
+            val isAudio = item.mediaType == DeviceMediaType.AUDIO
+            val resolvedCategory = when {
+                isAudio -> VideoCategory.AUDIO
+                item.durationSeconds <= 60 -> VideoCategory.SHORTS
+                else -> VideoCategory.VIDEOS
+            }
+            val artwork = if (isAudio) {
+                ThumbnailArtwork.AudioTrackArt(
+                    albumArtUri = item.albumArtUri,
+                    artist = item.artistOrFolder.ifBlank { "Device Audio" }
+                )
+            } else {
+                ThumbnailArtwork.LocalVideoFrame(item.uriString)
+            }
+            val qLabel = if (isAudio) "Audio" else item.qualityLabel.ifBlank { "SD" }
+            val extraTags = if (isAudio) {
+                listOf("Audio", "Music", "Device")
+            } else {
+                buildList {
+                    add("Video")
+                    add("Device")
+                    if (qLabel.contains("SD", ignoreCase = true)) add("SD")
+                    if (qLabel.isNotBlank()) add(qLabel)
+                }
+            }
             VideoItem(
-                id = "vid_device_${UUID.randomUUID()}",
+                id = if (isAudio) "aud_device_${UUID.randomUUID()}" else "vid_device_${UUID.randomUUID()}",
                 title = item.title,
-                description = "Imported from your phone storage to BT Tube.",
-                channelId = deviceChannelId,
-                category = VideoCategory.ALL,
+                description = if (isAudio) {
+                    "Device audio song${if (item.artistOrFolder.isNotBlank()) " • ${item.artistOrFolder}" else ""}"
+                } else {
+                    "Device video ($qLabel) • Play as Video or Background Audio"
+                },
+                channelId = if (isAudio) deviceAudioChannelId else deviceVideoChannelId,
+                category = resolvedCategory,
                 viewsCount = 1,
-                uploadDate = "On device",
+                uploadDate = if (isAudio) "Device Audio" else "Device Video ($qLabel)",
                 durationSeconds = item.durationSeconds,
-                is4K = false,
+                is4K = qLabel.contains("4K"),
                 baseLikes = 0,
-                artwork = ThumbnailArtwork.LocalVideoFrame(item.uriString),
-                tags = listOf("MyPhone", "LocalVideo"),
+                artwork = artwork,
+                tags = extraTags,
                 isUserCreated = true,
-                videoUri = item.uriString
+                videoUri = item.uriString,
+                isAudioOnly = isAudio,
+                qualityLabel = qLabel
             )
         }
 
         val newShorts = fresh
-            .filter { it.durationSeconds <= 60 }
+            .filter { it.mediaType == DeviceMediaType.VIDEO && it.durationSeconds <= 60 }
             .map { item ->
                 ShortItem(
                     id = "short_device_${UUID.randomUUID()}",
                     title = item.title,
-                    caption = "From My Phone #BTTube",
-                    channelId = deviceChannelId,
+                    caption = "Device Short Video",
+                    channelId = deviceVideoChannelId,
                     baseLikes = 0,
                     baseCommentsCount = 0,
                     baseSharesCount = 0,
-                    audioTrack = "Original Device Audio",
+                    audioTrack = "Original Video Audio",
                     durationSeconds = item.durationSeconds.coerceIn(5, 60),
                     artwork = ThumbnailArtwork.LocalVideoFrame(item.uriString),
                     isUserCreated = true,
@@ -357,11 +427,26 @@ class BtTubeRepository {
                 )
             }
 
-        _videos.update { newVideos + it }
+        _videos.update { newItems + it }
         if (newShorts.isNotEmpty()) {
             _shorts.update { newShorts + it }
         }
-        return newVideos.size
+
+        val videoCount = fresh.count { it.mediaType == DeviceMediaType.VIDEO }
+        val audioCount = fresh.count { it.mediaType == DeviceMediaType.AUDIO }
+        val firstAdded = newItems.firstOrNull()
+        if (firstAdded != null) {
+            val summaryNotif = NotificationItem(
+                id = "notif_${UUID.randomUUID()}",
+                title = "Loaded $videoCount videos & $audioCount audio songs",
+                subtitle = "Tap to play from your device library",
+                timeAgo = "Just now",
+                videoId = firstAdded.id,
+                channelId = firstAdded.channelId
+            )
+            _notifications.update { listOf(summaryNotif) + it }
+        }
+        return newItems.size
     }
 
     private fun ensureDeviceChannel(): String {
@@ -372,13 +457,13 @@ class BtTubeRepository {
                     Channel(
                         id = deviceChannelId,
                         name = "My Phone Videos",
-                        handle = "@myphone",
+                        handle = "@device_videos",
                         baseSubscriberCount = 1,
                         isVerified = true,
                         avatarColorHex = 0xFFD91424,
-                        initials = "MP",
-                        category = VideoCategory.TECH,
-                        tagline = "Videos imported from your Android device"
+                        initials = "MV",
+                        category = VideoCategory.VIDEOS,
+                        tagline = "Videos from your Android device"
                     )
                 ) + it
             }
@@ -387,12 +472,35 @@ class BtTubeRepository {
         return deviceChannelId
     }
 
+    private fun ensureDeviceAudioChannel(): String {
+        val deviceAudioId = "ch_device_audio"
+        if (_channels.value.none { it.id == deviceAudioId }) {
+            _channels.update {
+                listOf(
+                    Channel(
+                        id = deviceAudioId,
+                        name = "My Phone Audio",
+                        handle = "@device_audio",
+                        baseSubscriberCount = 1,
+                        isVerified = true,
+                        avatarColorHex = 0xFF991B1B,
+                        initials = "MA",
+                        category = VideoCategory.AUDIO,
+                        tagline = "Songs & audio files on your Android device"
+                    )
+                ) + it
+            }
+            _subscribedChannelIds.update { it + deviceAudioId }
+        }
+        return deviceAudioId
+    }
+
     private fun ensureUserChannel(profile: UserProfile, category: VideoCategory): String {
         val userChannelId = "ch_me"
         val existing = _channels.value.any { it.id == userChannelId }
-        val name = if (profile.isSignedIn) profile.name else "Your Studio"
-        val handle = if (profile.isSignedIn) profile.handle else "@yourstudio"
-        val initials = if (profile.isSignedIn) profile.avatarInitials else "YS"
+        val name = if (profile.isSignedIn) profile.name else "My Library"
+        val handle = if (profile.isSignedIn) profile.handle else "@mylibrary"
+        val initials = if (profile.isSignedIn) profile.avatarInitials else "ML"
         if (!existing) {
             _channels.update {
                 listOf(
@@ -400,12 +508,12 @@ class BtTubeRepository {
                         id = userChannelId,
                         name = name,
                         handle = handle,
-                        baseSubscriberCount = 128,
+                        baseSubscriberCount = 1,
                         isVerified = false,
                         avatarColorHex = 0xFFD91424,
                         initials = initials,
                         category = category,
-                        tagline = "BT Tube Creator Studio"
+                        tagline = "Device Library"
                     )
                 ) + it
             }

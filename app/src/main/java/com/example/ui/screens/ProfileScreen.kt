@@ -26,10 +26,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Login
 import androidx.compose.material.icons.automirrored.rounded.Logout
 import androidx.compose.material.icons.outlined.BookmarkBorder
-import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.NotificationsActive
-import androidx.compose.material.icons.outlined.PersonAdd
 import androidx.compose.material.icons.outlined.PhoneAndroid
 import androidx.compose.material.icons.outlined.PlayCircle
 import androidx.compose.material.icons.outlined.ThumbUp
@@ -47,7 +45,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
@@ -67,7 +64,6 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -87,7 +83,6 @@ import com.example.ui.viewmodel.ProfileUiState
 import com.example.util.FormatUtils
 import com.example.util.NetworkConnectionState
 
-private enum class AuthDialogMode { NONE, SIGN_IN, SIGN_UP }
 private enum class LibrarySheetMode { NONE, HISTORY, LIKED, WATCH_LATER }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -95,7 +90,7 @@ private enum class LibrarySheetMode { NONE, HISTORY, LIKED, WATCH_LATER }
 fun ProfileScreen(
     state: ProfileUiState,
     networkState: NetworkConnectionState,
-    onSignIn: (email: String, displayName: String?) -> Unit,
+    onGoogleSignIn: () -> Unit,
     onSignOut: () -> Unit,
     onVideoClick: (VideoItem) -> Unit,
     onScanAllMediaStoreVideos: () -> Unit,
@@ -109,7 +104,6 @@ fun ProfileScreen(
     onUpdateQuality: (PlaybackQuality) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    var authMode by remember { mutableStateOf(AuthDialogMode.NONE) }
     var librarySheet by remember { mutableStateOf(LibrarySheetMode.NONE) }
     var qualityMenuExpanded by remember { mutableStateOf(false) }
 
@@ -217,6 +211,14 @@ fun ProfileScreen(
                                         style = MaterialTheme.typography.labelLarge,
                                         color = MaterialTheme.colorScheme.primary
                                     )
+                                    if (state.userProfile.email.isNotBlank()) {
+                                        Text(
+                                            text = state.userProfile.email,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.testTag("profile_gmail_email")
+                                        )
+                                    }
                                     Spacer(modifier = Modifier.height(2.dp))
                                     Text(
                                         text = state.userProfile.bio,
@@ -227,76 +229,24 @@ fun ProfileScreen(
                             }
 
                             if (!state.userProfile.isSignedIn) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                Button(
+                                    onClick = onGoogleSignIn,
+                                    shape = RoundedCornerShape(12.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = MaterialTheme.colorScheme.primary
+                                    ),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(48.dp)
+                                        .testTag("profile_gmail_sign_in_button")
                                 ) {
-                                    Button(
-                                        onClick = {
-                                            authMode = if (authMode == AuthDialogMode.SIGN_IN) {
-                                                AuthDialogMode.NONE
-                                            } else {
-                                                AuthDialogMode.SIGN_IN
-                                            }
-                                        },
-                                        shape = RoundedCornerShape(12.dp),
-                                        colors = ButtonDefaults.buttonColors(
-                                            containerColor = MaterialTheme.colorScheme.primary
-                                        ),
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .height(48.dp)
-                                            .testTag("profile_sign_in_button")
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.AutoMirrored.Rounded.Login,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        Text(stringResource(R.string.sign_in))
-                                    }
-
-                                    OutlinedButton(
-                                        onClick = {
-                                            authMode = if (authMode == AuthDialogMode.SIGN_UP) {
-                                                AuthDialogMode.NONE
-                                            } else {
-                                                AuthDialogMode.SIGN_UP
-                                            }
-                                        },
-                                        shape = RoundedCornerShape(12.dp),
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .height(48.dp)
-                                            .testTag("profile_sign_up_button")
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Outlined.PersonAdd,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        Text(stringResource(R.string.create_account))
-                                    }
-                                }
-
-                                AnimatedVisibility(visible = authMode != AuthDialogMode.NONE) {
-                                    InlineAuthForm(
-                                        mode = authMode,
-                                        onCancel = { authMode = AuthDialogMode.NONE },
-                                        onSwitchMode = {
-                                            authMode = if (authMode == AuthDialogMode.SIGN_IN) {
-                                                AuthDialogMode.SIGN_UP
-                                            } else {
-                                                AuthDialogMode.SIGN_IN
-                                            }
-                                        },
-                                        onConfirm = { email, name ->
-                                            onSignIn(email, name)
-                                            authMode = AuthDialogMode.NONE
-                                        }
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Rounded.Login,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp)
                                     )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Sign in with Gmail")
                                 }
                             }
                         }
@@ -349,11 +299,11 @@ fun ProfileScreen(
                 item(key = "device_videos_shelf") {
                     Column {
                         ProfileVideoShelf(
-                            title = "My Phone Videos",
+                            title = "My Phone Videos & Audio",
                             icon = Icons.Outlined.PhoneAndroid,
                             videos = state.deviceVideos,
                             channelsById = state.channelsById,
-                            emptyText = "Add videos from your phone gallery or folder to watch offline in BT Tube.",
+                            emptyText = "Scan or pick videos & audio songs from your phone to play offline or in background audio mode.",
                             onSeeAll = null,
                             onVideoClick = onVideoClick,
                             testTag = "device_videos_shelf"
@@ -608,12 +558,12 @@ fun ProfileScreen(
                                             )
                                             Column {
                                                 Text(
-                                                    text = "Default playback quality",
+                                                    text = "Default playback quality (All SD & HD)",
                                                     style = MaterialTheme.typography.titleSmall,
                                                     color = MaterialTheme.colorScheme.onSurface
                                                 )
                                                 Text(
-                                                    text = state.settings.defaultQuality.label,
+                                                    text = "${state.settings.defaultQuality.label} • Supports 144p–480p SD",
                                                     style = MaterialTheme.typography.bodySmall,
                                                     color = MaterialTheme.colorScheme.primary
                                                 )
@@ -636,7 +586,8 @@ fun ProfileScreen(
                                                 onClick = {
                                                     qualityMenuExpanded = false
                                                     onUpdateQuality(quality)
-                                                }
+                                                },
+                                                modifier = Modifier.testTag("quality_option_${quality.name.lowercase()}")
                                             )
                                         }
                                     }
@@ -804,114 +755,6 @@ private fun ProfileVideoShelf(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun InlineAuthForm(
-    mode: AuthDialogMode,
-    onCancel: () -> Unit,
-    onSwitchMode: () -> Unit,
-    onConfirm: (email: String, name: String?) -> Unit
-) {
-    var name by remember { mutableStateOf("") }
-    var email by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
-    var errorMsg by remember { mutableStateOf<String?>(null) }
-
-    val isSignUp = mode == AuthDialogMode.SIGN_UP
-
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f),
-        shape = RoundedCornerShape(16.dp),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Text(
-                text = if (isSignUp) "Create BT Tube Account" else "Sign in to BT Tube",
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            if (isSignUp) {
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = {
-                        name = it
-                        errorMsg = null
-                    },
-                    label = { Text("Display Name") },
-                    singleLine = true,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("auth_name_input")
-                )
-            }
-            OutlinedTextField(
-                value = email,
-                onValueChange = {
-                    email = it
-                    errorMsg = null
-                },
-                label = { Text("Email") },
-                singleLine = true,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("auth_email_input")
-            )
-            OutlinedTextField(
-                value = password,
-                onValueChange = {
-                    password = it
-                    errorMsg = null
-                },
-                label = { Text("Password") },
-                singleLine = true,
-                visualTransformation = PasswordVisualTransformation(),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("auth_password_input")
-            )
-            if (errorMsg != null) {
-                Text(
-                    text = errorMsg.orEmpty(),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error
-                )
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                TextButton(onClick = onSwitchMode) {
-                    Text(
-                        if (isSignUp) "Have an account? Sign In"
-                        else "New? Create Account"
-                    )
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TextButton(onClick = onCancel) {
-                        Text("Cancel")
-                    }
-                    Button(
-                        onClick = {
-                            when {
-                                !email.contains("@") -> errorMsg = "Enter a valid email address"
-                                password.length < 4 -> errorMsg = "Password must be at least 4 characters"
-                                isSignUp && name.isBlank() -> errorMsg = "Enter your display name"
-                                else -> onConfirm(email, if (isSignUp) name else null)
-                            }
-                        },
-                        modifier = Modifier.testTag("auth_confirm_button")
-                    ) {
-                        Text(if (isSignUp) "Sign Up" else "Sign In")
                     }
                 }
             }

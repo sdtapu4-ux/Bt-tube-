@@ -36,5 +36,8 @@
     <string name="sign_in">Sign In</string>
     <string name="create_account">Sign Up</string>
     <string name="sign_out">Sign Out</string>
+    <string name="sign_in_gmail">Sign in with Gmail</string>
+    <string name="play_as_audio">Play as Audio</string>
+    <string name="back_to_video">Switch to Video</string>
     <string name="retry">Retry</string>
 </resources>

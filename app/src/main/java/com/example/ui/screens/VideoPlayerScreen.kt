@@ -49,14 +49,20 @@ import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Forward10
 import androidx.compose.material.icons.rounded.Fullscreen
 import androidx.compose.material.icons.rounded.FullscreenExit
+import androidx.compose.material.icons.rounded.Headphones
+import androidx.compose.material.icons.rounded.HighQuality
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
+import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Replay10
+import androidx.compose.material.icons.rounded.SkipNext
+import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.ThumbDown
 import androidx.compose.material.icons.rounded.ThumbUp
+import androidx.compose.material.icons.rounded.Videocam
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
@@ -95,6 +101,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.example.R
+import com.example.audio.BackgroundAudioState
+import com.example.model.PlaybackQuality
 import com.example.model.VideoItem
 import com.example.ui.components.ChannelAvatar
 import com.example.ui.components.CommentsBottomSheet
@@ -114,6 +122,8 @@ import kotlin.math.sin
 @Composable
 fun VideoPlayerScreen(
     state: PlayerUiState,
+    backgroundAudioState: BackgroundAudioState,
+    initialAudioMode: Boolean,
     onBack: () -> Unit,
     onTogglePlayPause: () -> Unit,
     onSeekTo: (Float) -> Unit,
@@ -121,8 +131,16 @@ fun VideoPlayerScreen(
     onSyncPosition: (Float) -> Unit,
     onAdvancePlayback: (Float) -> Unit,
     onSelectSpeed: (Float) -> Unit,
+    onSelectQuality: (PlaybackQuality) -> Unit,
     onToggleFullscreen: () -> Unit,
     onExitFullscreen: () -> Unit,
+    onStartBackgroundAudio: (VideoItem, Float, Float) -> Unit,
+    onStopBackgroundAudio: () -> Unit,
+    onToggleBackgroundPlayPause: () -> Unit,
+    onSeekBackgroundAudio: (Float) -> Unit,
+    onSetBackgroundSpeed: (Float) -> Unit,
+    onBackgroundNext: () -> Unit,
+    onBackgroundPrevious: () -> Unit,
     onToggleSubscribe: (String) -> Unit,
     onToggleLike: (String) -> Unit,
     onToggleDislike: (String) -> Unit,
@@ -137,19 +155,73 @@ fun VideoPlayerScreen(
 
     var controlsVisible by remember { mutableStateOf(true) }
     var isMuted by remember { mutableStateOf(false) }
+    var isAudioMode by remember(video.id, initialAudioMode) {
+        mutableStateOf(initialAudioMode || video.isAudioOnly)
+    }
     var descriptionExpanded by remember { mutableStateOf(false) }
     var showCommentsSheet by remember { mutableStateOf(false) }
     var seekFeedbackText by remember { mutableStateOf<String?>(null) }
     var pendingSeekSeconds by remember { mutableStateOf<Float?>(null) }
     val context = LocalContext.current
 
+    val isThisTrackInService = backgroundAudioState.currentTrack?.id == video.id
+    val effectiveIsPlaying = if (isAudioMode && isThisTrackInService) {
+        backgroundAudioState.isPlaying
+    } else if (isAudioMode) {
+        state.isPlaying
+    } else {
+        state.isPlaying
+    }
+    val effectivePosition = if (isAudioMode && isThisTrackInService) {
+        backgroundAudioState.positionSeconds
+    } else {
+        state.currentPositionSeconds
+    }
+    val effectiveDuration = if (isAudioMode && isThisTrackInService) {
+        backgroundAudioState.durationSeconds.coerceAtLeast(video.durationSeconds).coerceAtLeast(1)
+    } else {
+        video.durationSeconds.coerceAtLeast(1)
+    }
+    val effectiveSpeed = if (isAudioMode && isThisTrackInService) {
+        backgroundAudioState.playbackSpeed
+    } else {
+        state.playbackSpeed
+    }
+
+    LaunchedEffect(isAudioMode, video.id) {
+        if (isAudioMode && video.videoUri != null && backgroundAudioState.currentTrack?.id != video.id) {
+            onStartBackgroundAudio(video, state.currentPositionSeconds, state.playbackSpeed)
+        }
+    }
+
+    val switchToAudioMode: () -> Unit = {
+        if (!isAudioMode) {
+            isAudioMode = true
+            onStartBackgroundAudio(video, state.currentPositionSeconds, state.playbackSpeed)
+        }
+    }
+
+    val switchToVideoMode: () -> Unit = {
+        if (isAudioMode && !video.isAudioOnly) {
+            val resumeSec = if (isThisTrackInService) {
+                backgroundAudioState.positionSeconds
+            } else {
+                state.currentPositionSeconds
+            }
+            onStopBackgroundAudio()
+            isAudioMode = false
+            pendingSeekSeconds = resumeSec
+            onSeekTo(resumeSec)
+        }
+    }
+
     BackHandler(enabled = state.isFullscreen) {
         onExitFullscreen()
     }
 
-    // Request media audio focus whenever video playback is audible
-    DisposableEffect(state.isPlaying, isMuted, video.id) {
-        val abandonFocus = if (state.isPlaying && !isMuted) {
+    // Request media audio focus when playing in foreground video mode
+    DisposableEffect(effectiveIsPlaying, isMuted, isAudioMode, video.id) {
+        val abandonFocus = if (!isAudioMode && effectiveIsPlaying && !isMuted) {
             VideoAudioHelper.requestMediaAudioFocus(context)
         } else {
             {}
@@ -159,22 +231,22 @@ fun VideoPlayerScreen(
         }
     }
 
-    // Play ambient soundtrack for sample catalog videos without a local videoUri
-    LaunchedEffect(state.isPlaying, isMuted, state.playbackSpeed, video.id, video.videoUri) {
-        if (video.videoUri == null && state.isPlaying && !isMuted) {
+    // Play ambient soundtrack only for items without a local media URI
+    LaunchedEffect(effectiveIsPlaying, isMuted, effectiveSpeed, video.id, video.videoUri, isAudioMode) {
+        if (video.videoUri == null && effectiveIsPlaying && !isMuted) {
             VideoAudioHelper.playAmbientSoundtrack(
                 seedKey = video.id,
-                playbackSpeed = state.playbackSpeed
+                playbackSpeed = effectiveSpeed
             )
         }
     }
 
-    // Simulated playback ticker only when playing sample catalog videos without a local videoUri
-    LaunchedEffect(state.isPlaying, state.playbackSpeed, video.id, video.videoUri) {
+    // Simulated playback ticker only when playing entries without a local videoUri
+    LaunchedEffect(effectiveIsPlaying, effectiveSpeed, video.id, video.videoUri, isAudioMode) {
         if (video.videoUri != null) return@LaunchedEffect
-        while (state.isPlaying) {
+        while (effectiveIsPlaying) {
             delay(100L)
-            onAdvancePlayback(0.1f * state.playbackSpeed)
+            onAdvancePlayback(0.1f * effectiveSpeed)
         }
     }
 
@@ -186,43 +258,74 @@ fun VideoPlayerScreen(
         }
     }
 
+    val handlePlayPause: () -> Unit = {
+        if (isAudioMode && isThisTrackInService) {
+            onToggleBackgroundPlayPause()
+        } else {
+            onTogglePlayPause()
+        }
+    }
+
+    val handleSeekTo: (Float) -> Unit = { sec ->
+        if (isAudioMode && isThisTrackInService) {
+            onSeekBackgroundAudio(sec)
+        } else {
+            pendingSeekSeconds = sec
+            onSeekTo(sec)
+        }
+    }
+
+    val handleSelectSpeed: (Float) -> Unit = { speed ->
+        if (isAudioMode && isThisTrackInService) {
+            onSetBackgroundSpeed(speed)
+        } else {
+            onSelectSpeed(speed)
+        }
+    }
+
     val playerSurface: @Composable (Modifier) -> Unit = { playerMod ->
         VideoPlaybackStage(
             video = video,
-            isPlaying = state.isPlaying,
+            durationSeconds = effectiveDuration,
+            isPlaying = effectiveIsPlaying,
             isMuted = isMuted,
+            isAudioMode = isAudioMode,
             isFullscreen = state.isFullscreen,
-            currentPositionSeconds = state.currentPositionSeconds,
-            playbackSpeed = state.playbackSpeed,
-            controlsVisible = controlsVisible,
+            currentPositionSeconds = effectivePosition,
+            playbackSpeed = effectiveSpeed,
+            selectedQuality = state.selectedQuality,
+            controlsVisible = if (isAudioMode) true else controlsVisible,
             seekFeedbackText = seekFeedbackText,
-            onToggleControls = { controlsVisible = !controlsVisible },
+            onToggleControls = {
+                if (!isAudioMode) controlsVisible = !controlsVisible
+            },
             onToggleMute = { isMuted = !isMuted },
+            onToggleAudioMode = {
+                if (isAudioMode) switchToVideoMode() else switchToAudioMode()
+            },
             onDoubleTapLeft = {
-                val target = (state.currentPositionSeconds - 10f).coerceAtLeast(0f)
-                pendingSeekSeconds = target
-                onSeekBy(-10f)
+                val target = (effectivePosition - 10f).coerceAtLeast(0f)
+                handleSeekTo(target)
                 seekFeedbackText = "-10s"
             },
             onDoubleTapRight = {
-                val target = (state.currentPositionSeconds + 10f)
-                    .coerceAtMost(video.durationSeconds.toFloat().coerceAtLeast(1f))
-                pendingSeekSeconds = target
-                onSeekBy(10f)
+                val target = (effectivePosition + 10f)
+                    .coerceAtMost(effectiveDuration.toFloat().coerceAtLeast(1f))
+                handleSeekTo(target)
                 seekFeedbackText = "+10s"
             },
+            onBackgroundPrevious = onBackgroundPrevious,
+            onBackgroundNext = onBackgroundNext,
             onBack = {
                 if (state.isFullscreen) onExitFullscreen() else onBack()
             },
-            onTogglePlayPause = onTogglePlayPause,
-            onSeekTo = { sec ->
-                pendingSeekSeconds = sec
-                onSeekTo(sec)
-            },
+            onTogglePlayPause = handlePlayPause,
+            onSeekTo = handleSeekTo,
             pendingSeekSeconds = pendingSeekSeconds,
             onConsumePendingSeek = { pendingSeekSeconds = null },
             onSyncPosition = onSyncPosition,
-            onSelectSpeed = onSelectSpeed,
+            onSelectSpeed = handleSelectSpeed,
+            onSelectQuality = onSelectQuality,
             onToggleFullscreen = onToggleFullscreen,
             modifier = playerMod
         )
@@ -419,13 +522,36 @@ fun VideoPlayerScreen(
                 }
             }
 
-            // Action Strip: Like, Dislike, Share, Save
+            // Action Strip: Play as Audio, Like, Dislike, Share, Save
             item(key = "action_pills") {
                 val likeCount = video.baseLikes + if (state.isLiked) 1 else 0
                 LazyRow(
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
+                    item {
+                        ActionPillButton(
+                            icon = if (isAudioMode && !video.isAudioOnly) {
+                                Icons.Rounded.Videocam
+                            } else {
+                                Icons.Rounded.Headphones
+                            },
+                            label = when {
+                                video.isAudioOnly -> "Background Audio"
+                                isAudioMode -> "Switch to Video"
+                                else -> "Play as Audio"
+                            },
+                            selected = isAudioMode,
+                            onClick = {
+                                if (isAudioMode && !video.isAudioOnly) {
+                                    switchToVideoMode()
+                                } else {
+                                    switchToAudioMode()
+                                }
+                            },
+                            testTag = "player_audio_mode_button"
+                        )
+                    }
                     item {
                         ActionPillButton(
                             icon = if (state.isLiked) Icons.Rounded.ThumbUp else Icons.Outlined.ThumbUp,
@@ -551,17 +677,23 @@ fun VideoPlayerScreen(
 @Composable
 private fun VideoPlaybackStage(
     video: VideoItem,
+    durationSeconds: Int,
     isPlaying: Boolean,
     isMuted: Boolean,
+    isAudioMode: Boolean,
     isFullscreen: Boolean,
     currentPositionSeconds: Float,
     playbackSpeed: Float,
+    selectedQuality: PlaybackQuality,
     controlsVisible: Boolean,
     seekFeedbackText: String?,
     onToggleControls: () -> Unit,
     onToggleMute: () -> Unit,
+    onToggleAudioMode: () -> Unit,
     onDoubleTapLeft: () -> Unit,
     onDoubleTapRight: () -> Unit,
+    onBackgroundPrevious: () -> Unit,
+    onBackgroundNext: () -> Unit,
     onBack: () -> Unit,
     onTogglePlayPause: () -> Unit,
     onSeekTo: (Float) -> Unit,
@@ -569,17 +701,19 @@ private fun VideoPlaybackStage(
     onConsumePendingSeek: () -> Unit,
     onSyncPosition: (Float) -> Unit,
     onSelectSpeed: (Float) -> Unit,
+    onSelectQuality: (PlaybackQuality) -> Unit,
     onToggleFullscreen: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var speedMenuExpanded by remember { mutableStateOf(false) }
-    val duration = video.durationSeconds.toFloat().coerceAtLeast(1f)
+    var qualityMenuExpanded by remember { mutableStateOf(false) }
+    val duration = durationSeconds.toFloat().coerceAtLeast(1f)
     val speedOptions = listOf(0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f)
 
     Box(
         modifier = modifier
             .background(Color.Black)
-            .pointerInput(Unit) {
+            .pointerInput(isAudioMode) {
                 detectTapGestures(
                     onTap = { onToggleControls() },
                     onDoubleTap = { offset ->
@@ -592,7 +726,81 @@ private fun VideoPlaybackStage(
                 )
             }
     ) {
-        if (video.videoUri != null) {
+        if (isAudioMode) {
+            // Audio-Only / Background Audio Visualizer Stage
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.radialGradient(
+                            colors = listOf(Color(0xFF4A0A12), Color(0xFF13131A), Color.Black)
+                        )
+                    )
+                    .testTag("audio_mode_stage"),
+                contentAlignment = Alignment.Center
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 24.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        tonalElevation = 4.dp,
+                        modifier = Modifier.size(86.dp)
+                    ) {
+                        VideoThumbnailSurface(
+                            artwork = video.artwork,
+                            contentDescription = video.title,
+                            aspectRatio = 1f
+                        )
+                    }
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Surface(
+                            color = BtCrimson.copy(alpha = 0.85f),
+                            shape = RoundedCornerShape(999.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.MusicNote,
+                                    contentDescription = null,
+                                    tint = BtWhite,
+                                    modifier = Modifier.size(12.dp)
+                                )
+                                Text(
+                                    text = "BACKGROUND AUDIO ON",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = BtWhite,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                        Text(
+                            text = video.title,
+                            style = MaterialTheme.typography.titleMedium,
+                            color = BtWhite,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = "Keeps playing even if you leave the app",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = BtWhite.copy(alpha = 0.72f),
+                            maxLines = 1
+                        )
+                    }
+                }
+            }
+        } else if (video.videoUri != null) {
             RealLocalVideoSurface(
                 uriString = video.videoUri,
                 isPlaying = isPlaying,
@@ -601,10 +809,10 @@ private fun VideoPlaybackStage(
                 pendingSeekSeconds = pendingSeekSeconds,
                 onConsumePendingSeek = onConsumePendingSeek,
                 onPositionUpdate = onSyncPosition,
+                onSwitchToAudioFallback = { if (!isAudioMode) onToggleAudioMode() },
                 modifier = Modifier.fillMaxSize()
             )
         } else {
-            // Subtle live zoom motion during active playback for sample catalog entries
             val motionScale = if (isPlaying) {
                 1f + 0.03f * sin(currentPositionSeconds * 0.45f)
             } else {
@@ -624,7 +832,7 @@ private fun VideoPlaybackStage(
             )
         }
 
-        // Live animated audio/frame equalizer bar strip at very bottom when controls are hidden
+        // Live animated progress strip at very bottom when controls are hidden
         if (isPlaying && !controlsVisible) {
             Canvas(
                 modifier = Modifier
@@ -675,13 +883,13 @@ private fun VideoPlaybackStage(
                         Brush.verticalGradient(
                             colors = listOf(
                                 Color.Black.copy(alpha = 0.65f),
-                                Color.Black.copy(alpha = 0.28f),
+                                Color.Black.copy(alpha = if (isAudioMode) 0.12f else 0.28f),
                                 Color.Black.copy(alpha = 0.78f)
                             )
                         )
                     )
             ) {
-                // Top Player Bar: Back + Title + Speed Selector
+                // Top Player Bar: Back + Title + Audio/Video Toggle + Mute + Speed Selector
                 Row(
                     modifier = Modifier
                         .align(Alignment.TopCenter)
@@ -719,25 +927,112 @@ private fun VideoPlaybackStage(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
+                        if (!video.isAudioOnly) {
+                            Surface(
+                                color = if (isAudioMode) BtCrimson.copy(alpha = 0.9f) else Color.Black.copy(alpha = 0.55f),
+                                shape = RoundedCornerShape(999.dp),
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(999.dp))
+                                    .clickable { onToggleAudioMode() }
+                                    .testTag(if (isAudioMode) "switch_to_video_button" else "top_audio_mode_button")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = if (isAudioMode) Icons.Rounded.Videocam else Icons.Rounded.Headphones,
+                                        contentDescription = if (isAudioMode) "Switch to Video" else "Play as Audio",
+                                        tint = BtWhite,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Text(
+                                        text = if (isAudioMode) "Video" else "Audio",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = BtWhite,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        }
+
                         // Sound Mute / Unmute Toggle
-                        IconButton(
-                            onClick = onToggleMute,
-                            modifier = Modifier
-                                .size(38.dp)
-                                .clip(CircleShape)
-                                .background(Color.Black.copy(alpha = 0.55f))
-                                .testTag("player_mute_button")
-                        ) {
-                            Icon(
-                                imageVector = if (isMuted) {
-                                    Icons.AutoMirrored.Rounded.VolumeOff
-                                } else {
-                                    Icons.AutoMirrored.Rounded.VolumeUp
-                                },
-                                contentDescription = if (isMuted) "Unmute video" else "Mute video",
-                                tint = BtWhite,
-                                modifier = Modifier.size(18.dp)
-                            )
+                        if (!isAudioMode) {
+                            IconButton(
+                                onClick = onToggleMute,
+                                modifier = Modifier
+                                    .size(38.dp)
+                                    .clip(CircleShape)
+                                    .background(Color.Black.copy(alpha = 0.55f))
+                                    .testTag("player_mute_button")
+                            ) {
+                                Icon(
+                                    imageVector = if (isMuted) {
+                                        Icons.AutoMirrored.Rounded.VolumeOff
+                                    } else {
+                                        Icons.AutoMirrored.Rounded.VolumeUp
+                                    },
+                                    contentDescription = if (isMuted) "Unmute video" else "Mute video",
+                                    tint = BtWhite,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+
+                        // Video Quality Selector (All SD: 144p, 240p, 360p, 480p + HD + Auto)
+                        if (!video.isAudioOnly) {
+                            Box {
+                                Surface(
+                                    color = Color.Black.copy(alpha = 0.55f),
+                                    shape = RoundedCornerShape(999.dp),
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(999.dp))
+                                        .clickable { qualityMenuExpanded = true }
+                                        .testTag("player_quality_button")
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.HighQuality,
+                                            contentDescription = "Playback quality",
+                                            tint = BtWhite,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Text(
+                                            text = selectedQuality.shortLabel,
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = BtWhite,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+
+                                DropdownMenu(
+                                    expanded = qualityMenuExpanded,
+                                    onDismissRequest = { qualityMenuExpanded = false }
+                                ) {
+                                    PlaybackQuality.entries.forEach { quality ->
+                                        DropdownMenuItem(
+                                            text = {
+                                                Text(
+                                                    text = quality.label,
+                                                    fontWeight = if (quality == selectedQuality) FontWeight.Bold else FontWeight.Normal,
+                                                    color = if (quality == selectedQuality) BtCrimson else MaterialTheme.colorScheme.onSurface
+                                                )
+                                            },
+                                            onClick = {
+                                                qualityMenuExpanded = false
+                                                onSelectQuality(quality)
+                                            },
+                                            modifier = Modifier.testTag("player_quality_${quality.name.lowercase()}")
+                                        )
+                                    }
+                                }
+                            }
                         }
 
                         // Playback Speed Selector
@@ -794,58 +1089,60 @@ private fun VideoPlaybackStage(
                     }
                 }
 
-                // Center Transport Controls: -10s, Play/Pause, +10s
-                Row(
-                    modifier = Modifier.align(Alignment.Center),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(24.dp)
-                ) {
-                    IconButton(
-                        onClick = { onDoubleTapLeft() },
-                        modifier = Modifier
-                            .size(48.dp)
-                            .clip(CircleShape)
-                            .background(Color.Black.copy(alpha = 0.45f))
-                            .testTag("player_replay_10")
+                // Center Transport Controls (hidden in Audio Mode top/bottom layout? Keep clean transport in Video Mode; in Audio Mode show Previous / Play-Pause / Next near bottom)
+                if (!isAudioMode) {
+                    Row(
+                        modifier = Modifier.align(Alignment.Center),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(24.dp)
                     ) {
-                        Icon(
-                            imageVector = Icons.Rounded.Replay10,
-                            contentDescription = "Rewind 10 seconds",
-                            tint = BtWhite,
-                            modifier = Modifier.size(26.dp)
-                        )
-                    }
+                        IconButton(
+                            onClick = { onDoubleTapLeft() },
+                            modifier = Modifier
+                                .size(48.dp)
+                                .clip(CircleShape)
+                                .background(Color.Black.copy(alpha = 0.45f))
+                                .testTag("player_replay_10")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Replay10,
+                                contentDescription = "Rewind 10 seconds",
+                                tint = BtWhite,
+                                modifier = Modifier.size(26.dp)
+                            )
+                        }
 
-                    IconButton(
-                        onClick = onTogglePlayPause,
-                        modifier = Modifier
-                            .size(60.dp)
-                            .clip(CircleShape)
-                            .background(BtCrimson.copy(alpha = 0.92f))
-                            .testTag("player_play_pause_button")
-                    ) {
-                        Icon(
-                            imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                            contentDescription = stringResource(R.string.cd_play_pause),
-                            tint = BtWhite,
-                            modifier = Modifier.size(34.dp)
-                        )
-                    }
+                        IconButton(
+                            onClick = onTogglePlayPause,
+                            modifier = Modifier
+                                .size(60.dp)
+                                .clip(CircleShape)
+                                .background(BtCrimson.copy(alpha = 0.92f))
+                                .testTag("player_play_pause_button")
+                        ) {
+                            Icon(
+                                imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                                contentDescription = stringResource(R.string.cd_play_pause),
+                                tint = BtWhite,
+                                modifier = Modifier.size(34.dp)
+                            )
+                        }
 
-                    IconButton(
-                        onClick = { onDoubleTapRight() },
-                        modifier = Modifier
-                            .size(48.dp)
-                            .clip(CircleShape)
-                            .background(Color.Black.copy(alpha = 0.45f))
-                            .testTag("player_forward_10")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.Forward10,
-                            contentDescription = "Forward 10 seconds",
-                            tint = BtWhite,
-                            modifier = Modifier.size(26.dp)
-                        )
+                        IconButton(
+                            onClick = { onDoubleTapRight() },
+                            modifier = Modifier
+                                .size(48.dp)
+                                .clip(CircleShape)
+                                .background(Color.Black.copy(alpha = 0.45f))
+                                .testTag("player_forward_10")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Forward10,
+                                contentDescription = "Forward 10 seconds",
+                                tint = BtWhite,
+                                modifier = Modifier.size(26.dp)
+                            )
+                        }
                     }
                 }
 
@@ -866,7 +1163,7 @@ private fun VideoPlaybackStage(
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             Text(
-                                text = "${FormatUtils.formatDuration(currentPositionSeconds.toInt())} / ${FormatUtils.formatDuration(video.durationSeconds)}",
+                                text = "${FormatUtils.formatDuration(currentPositionSeconds.toInt())} / ${FormatUtils.formatDuration(durationSeconds)}",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = BtWhite,
                                 modifier = Modifier.testTag("player_time_label")
@@ -890,19 +1187,61 @@ private fun VideoPlaybackStage(
                             }
                         }
 
-                        IconButton(
-                            onClick = onToggleFullscreen,
-                            modifier = Modifier.testTag("player_fullscreen_button")
-                        ) {
-                            Icon(
-                                imageVector = if (isFullscreen) {
-                                    Icons.Rounded.FullscreenExit
-                                } else {
-                                    Icons.Rounded.Fullscreen
-                                },
-                                contentDescription = stringResource(R.string.cd_fullscreen),
-                                tint = BtWhite
-                            )
+                        if (isAudioMode) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                IconButton(
+                                    onClick = onBackgroundPrevious,
+                                    modifier = Modifier.size(38.dp).testTag("audio_prev_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.SkipPrevious,
+                                        contentDescription = "Previous track",
+                                        tint = BtWhite
+                                    )
+                                }
+                                IconButton(
+                                    onClick = onTogglePlayPause,
+                                    modifier = Modifier
+                                        .size(40.dp)
+                                        .clip(CircleShape)
+                                        .background(BtCrimson)
+                                        .testTag("player_play_pause_button")
+                                ) {
+                                    Icon(
+                                        imageVector = if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                                        contentDescription = stringResource(R.string.cd_play_pause),
+                                        tint = BtWhite
+                                    )
+                                }
+                                IconButton(
+                                    onClick = onBackgroundNext,
+                                    modifier = Modifier.size(38.dp).testTag("audio_next_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.SkipNext,
+                                        contentDescription = "Next track",
+                                        tint = BtWhite
+                                    )
+                                }
+                            }
+                        } else {
+                            IconButton(
+                                onClick = onToggleFullscreen,
+                                modifier = Modifier.testTag("player_fullscreen_button")
+                            ) {
+                                Icon(
+                                    imageVector = if (isFullscreen) {
+                                        Icons.Rounded.FullscreenExit
+                                    } else {
+                                        Icons.Rounded.Fullscreen
+                                    },
+                                    contentDescription = stringResource(R.string.cd_fullscreen),
+                                    tint = BtWhite
+                                )
+                            }
                         }
                     }
 
@@ -983,10 +1322,12 @@ private fun RealLocalVideoSurface(
     pendingSeekSeconds: Float?,
     onConsumePendingSeek: () -> Unit,
     onPositionUpdate: (Float) -> Unit,
+    onSwitchToAudioFallback: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var videoViewRef by remember(uriString) { mutableStateOf<VideoView?>(null) }
     var mediaPlayerRef by remember(uriString) { mutableStateOf<MediaPlayer?>(null) }
+    var videoCodecError by remember(uriString) { mutableStateOf(false) }
 
     DisposableEffect(uriString) {
         onDispose {
@@ -1039,41 +1380,77 @@ private fun RealLocalVideoSurface(
         }
     }
 
-    key(uriString) {
-        AndroidView(
-            modifier = modifier,
-            factory = { context ->
-                VideoView(context).apply {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        runCatching {
-                            setAudioFocusRequest(AudioManager.AUDIOFOCUS_GAIN)
-                            setAudioAttributes(VideoAudioHelper.mediaAudioAttributes())
+    Box(modifier = modifier) {
+        key(uriString) {
+            AndroidView(
+                modifier = Modifier.fillMaxSize(),
+                factory = { context ->
+                    VideoView(context).apply {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            runCatching {
+                                setAudioFocusRequest(AudioManager.AUDIOFOCUS_GAIN)
+                                setAudioAttributes(VideoAudioHelper.mediaAudioAttributes())
+                            }
                         }
-                    }
-                    setVideoURI(Uri.parse(uriString))
-                    setOnPreparedListener { mp ->
-                        mediaPlayerRef = mp
-                        runCatching {
-                            mp.setAudioAttributes(VideoAudioHelper.mediaAudioAttributes())
+                        setVideoURI(Uri.parse(uriString))
+                        setOnPreparedListener { mp ->
+                            videoCodecError = false
+                            mediaPlayerRef = mp
+                            runCatching {
+                                mp.setVideoScalingMode(MediaPlayer.VIDEO_SCALING_MODE_SCALE_TO_FIT)
+                                mp.setAudioAttributes(VideoAudioHelper.mediaAudioAttributes())
+                            }
+                            val volume = if (isMuted) 0f else 1f
+                            runCatching { mp.setVolume(volume, volume) }
+                            runCatching {
+                                val params = mp.playbackParams
+                                params.speed = playbackSpeed
+                                mp.playbackParams = params
+                            }
+                            if (isPlaying) start()
                         }
-                        val volume = if (isMuted) 0f else 1f
-                        runCatching { mp.setVolume(volume, volume) }
-                        runCatching {
-                            val params = mp.playbackParams
-                            params.speed = playbackSpeed
-                            mp.playbackParams = params
+                        setOnErrorListener { _, _, _ ->
+                            videoCodecError = true
+                            true
                         }
-                        if (isPlaying) start()
+                        setOnCompletionListener {
+                            runCatching { onPositionUpdate(duration / 1000f) }
+                        }
+                        videoViewRef = this
                     }
-                    setOnCompletionListener {
-                        runCatching { onPositionUpdate(duration / 1000f) }
-                    }
-                    videoViewRef = this
+                },
+                update = { view ->
+                    videoViewRef = view
                 }
-            },
-            update = { view ->
-                videoViewRef = view
+            )
+        }
+
+        if (videoCodecError) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.85f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.padding(16.dp)
+                ) {
+                    Text(
+                        text = "SD video track requires audio-only mode on this device",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = BtWhite
+                    )
+                    Button(
+                        onClick = onSwitchToAudioFallback,
+                        colors = ButtonDefaults.buttonColors(containerColor = BtCrimson),
+                        modifier = Modifier.testTag("video_fallback_audio_button")
+                    ) {
+                        Text("Play Audio Track")
+                    }
+                }
             }
-        )
+        }
     }
 }

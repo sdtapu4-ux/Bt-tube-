@@ -80,7 +80,7 @@ fun CreateScreen(
     var isShort by remember { mutableStateOf(false) }
     var title by remember { mutableStateOf("") }
     var description by remember { mutableStateOf("") }
-    var selectedCategory by remember { mutableStateOf(VideoCategory.TECH) }
+    var selectedCategory by remember { mutableStateOf(VideoCategory.VIDEOS) }
     var selectedStyle by remember { mutableStateOf(StudioSceneStyle.CRIMSON_STUDIO) }
     var pickedMediaUri by remember { mutableStateOf<Uri?>(null) }
     var titleError by remember { mutableStateOf(false) }
