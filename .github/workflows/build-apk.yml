@@ -50,9 +50,16 @@ jobs:
 
           echo "Using sdkmanager: $SDKMANAGER"
           mkdir -p "$SDK_ROOT/licenses"
+          touch "$SDK_ROOT/licenses/android-sdk-license" "$SDK_ROOT/licenses/android-sdk-preview-license"
+          for hash in 24333f8a63b6825ea9c5514f83c2829b004d1fee 8933bad161af4178b1185d1a37fbf41ea5269c55 d56f5187479451eabf01fb78af6dfcb131a6481e; do
+            grep -qxF "$hash" "$SDK_ROOT/licenses/android-sdk-license" || echo "$hash" >> "$SDK_ROOT/licenses/android-sdk-license"
+          done
+          grep -qxF "84831b9409646a918e30573bab4c9c91346d8abd" "$SDK_ROOT/licenses/android-sdk-preview-license" || \
+            echo "84831b9409646a918e30573bab4c9c91346d8abd" >> "$SDK_ROOT/licenses/android-sdk-preview-license"
           yes | "$SDKMANAGER" --sdk_root="$SDK_ROOT" --licenses >/dev/null 2>&1 || true
           yes | "$SDKMANAGER" --sdk_root="$SDK_ROOT" "platform-tools" "build-tools;36.0.0" "platforms;android-36"
-          yes | "$SDKMANAGER" --sdk_root="$SDK_ROOT" "platforms;android-36.1" || true
+          yes | "$SDKMANAGER" --sdk_root="$SDK_ROOT" "platforms;android-36.1" || \
+            yes | "$SDKMANAGER" --sdk_root="$SDK_ROOT" --channel=1 "platforms;android-36.1" || true
 
           echo "$SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
           echo "$(dirname "$SDKMANAGER")" >> "$GITHUB_PATH"
@@ -86,10 +93,18 @@ jobs:
 
       - name: Build BT Tube Debug APK
         run: |
-          if [ -x ./gradlew ]; then
-            ./gradlew :app:assembleDebug --no-daemon --stacktrace
+          GRADLE_ARGS=(
+            :app:assembleDebug
+            --no-daemon
+            --no-configuration-cache
+            --console=plain
+            "-Dorg.gradle.jvmargs=-Xmx4g -Dfile.encoding=UTF-8"
+            "-Dkotlin.compiler.execution.strategy=daemon"
+          )
+          if [ -x ./gradlew ] && [ -f gradle/wrapper/gradle-wrapper.jar ]; then
+            ./gradlew "${GRADLE_ARGS[@]}"
           else
-            gradle :app:assembleDebug --no-daemon --stacktrace
+            gradle "${GRADLE_ARGS[@]}"
           fi
           cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/BT-Tube.apk
 
