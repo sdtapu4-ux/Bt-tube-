@@ -59,6 +59,7 @@ fun BtTubeRoot() {
     }
     var isSigningIn by remember { mutableStateOf(false) }
     var authError by remember { mutableStateOf<String?>(null) }
+    var continueWithoutFirebase by remember { mutableStateOf(false) }
 
     if (firebaseAvailable) {
         DisposableEffect(Unit) {
@@ -111,30 +112,40 @@ fun BtTubeRoot() {
     }
 
     val signedInUser = currentUser
-    if (signedInUser == null) {
+    if (signedInUser == null && !(continueWithoutFirebase && !firebaseAvailable)) {
         BtTubeTheme {
             GmailAuthScreen(
                 isSigningIn = isSigningIn,
                 errorMessage = authError,
-                onGoogleSignInClick = launchInteractiveGoogleSignIn
+                onGoogleSignInClick = launchInteractiveGoogleSignIn,
+                onContinueOffline = if (!firebaseAvailable) {
+                    { continueWithoutFirebase = true }
+                } else {
+                    null
+                }
             )
         }
     } else {
-        key(signedInUser.uid) {
+        val sessionKey = signedInUser?.uid ?: "offline_device_session"
+        key(sessionKey) {
             val viewModel: BtTubeViewModel = viewModel(
-                key = signedInUser.uid,
+                key = sessionKey,
                 factory = viewModelFactory {
                     initializer {
                         val app = checkNotNull(this[APPLICATION_KEY]) {
                             "APPLICATION_KEY missing from CreationExtras"
                         }
-                        val databaseId = app.getString(R.string.firestore_database_id)
-                        val db = FirebaseFirestore.getInstance(databaseId)
-                        BtTubeViewModel(
-                            repository = BtTubeRepository(),
-                            accountRepository = UserAccountFirestoreRepository(db),
-                            authenticatedUser = signedInUser
-                        )
+                        if (signedInUser != null) {
+                            val databaseId = app.getString(R.string.firestore_database_id)
+                            val db = FirebaseFirestore.getInstance(databaseId)
+                            BtTubeViewModel(
+                                repository = BtTubeRepository(),
+                                accountRepository = UserAccountFirestoreRepository(db),
+                                authenticatedUser = signedInUser
+                            )
+                        } else {
+                            BtTubeViewModel(repository = BtTubeRepository())
+                        }
                     }
                 }
             )
@@ -145,6 +156,7 @@ fun BtTubeRoot() {
                     viewModel = viewModel,
                     onGoogleSignIn = launchInteractiveGoogleSignIn,
                     onSignOut = {
+                        continueWithoutFirebase = false
                         GoogleSignInHelper.signOut(
                             credentialManager = credentialManager,
                             scope = scope,

@@ -114,6 +114,18 @@ internal fun FirebaseAuth.authStateFlow(): Flow<FirebaseUser?> = callbackFlow {
 
 object GoogleSignInHelper {
 
+    private fun resolveDefaultWebClientId(context: Context): String? {
+        val resId = context.resources.getIdentifier(
+            "default_web_client_id",
+            "string",
+            context.packageName
+        )
+        if (resId == 0) return null
+        return runCatching { context.getString(resId) }
+            .getOrNull()
+            ?.takeIf { it.isNotBlank() }
+    }
+
     fun isFirebaseAvailable(context: Context): Boolean {
         return runCatching {
             FirebaseApp.getApps(context.applicationContext).isNotEmpty() ||
@@ -137,9 +149,8 @@ object GoogleSignInHelper {
             onAuthSuccess(existingUser)
             return
         }
-        val clientId = try {
-            context.getString(R.string.default_web_client_id)
-        } catch (_: Exception) {
+        val clientId = resolveDefaultWebClientId(context)
+        if (clientId == null) {
             onUnauthenticated()
             return
         }
@@ -182,9 +193,8 @@ object GoogleSignInHelper {
             onAuthError("Firebase is not initialized on this device.")
             return
         }
-        val clientId = try {
-            context.getString(R.string.default_web_client_id)
-        } catch (_: Exception) {
+        val clientId = resolveDefaultWebClientId(context)
+        if (clientId == null) {
             onAuthError("Google Sign-In configuration missing: default_web_client_id not found")
             return
         }

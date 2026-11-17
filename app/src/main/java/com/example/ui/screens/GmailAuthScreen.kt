@@ -29,6 +29,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -51,6 +52,7 @@ fun GmailAuthScreen(
     isSigningIn: Boolean,
     errorMessage: String?,
     onGoogleSignInClick: () -> Unit,
+    onContinueOffline: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     Box(
@@ -182,8 +184,28 @@ fun GmailAuthScreen(
                 }
             }
 
+            if (onContinueOffline != null) {
+                OutlinedButton(
+                    onClick = onContinueOffline,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .testTag("gmail_continue_offline_button")
+                ) {
+                    Text(
+                        text = "Continue to Device Videos & Audio",
+                        style = MaterialTheme.typography.titleSmall
+                    )
+                }
+            }
+
             Text(
-                text = "Secured by Google Sign-In & Firebase Authentication",
+                text = if (onContinueOffline != null) {
+                    "Firebase config (google-services.json) is not bundled in this build"
+                } else {
+                    "Secured by Google Sign-In & Firebase Authentication"
+                },
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center
