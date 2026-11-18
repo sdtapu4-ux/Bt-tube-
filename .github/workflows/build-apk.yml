@@ -1,4 +1,4 @@
-name: Build BT Tube APK
+name: Build LT player APK
 
 on:
   push:
